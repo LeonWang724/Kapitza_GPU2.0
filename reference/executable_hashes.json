@@ -1,0 +1,14 @@
+{
+  "_codex_cuda_port": "Reference executable identity recorded before implementation.",
+  "source_tree_executable": {
+    "path": "reference/gpe1d_2-master/gpe1d_2/gpe1d_2.exe",
+    "sha256": "9283aaf994b35643cf8519fee9c536db304c6087466aed9d9a3c53ea1365f5bc"
+  },
+  "phase_diagram_workflow_executable": {
+    "path": "phase_diagram/simulation_core/gpe1d_2.exe",
+    "sha256": "13edb97d376e9f57148ec2afbe92df097bbe5b7b4a677993888675f4874435a9"
+  },
+  "same_binary": false,
+  "observed_workflow_strings": ["Corr:", "InitOverlap"]
+}
+

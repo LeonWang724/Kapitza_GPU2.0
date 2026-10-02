@@ -1,0 +1,41 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 27,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-ninja",
+      "displayName": "Windows MSVC + Ninja Multi-Config + native CUDA GPU",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_CUDA_ARCHITECTURES": "native",
+        "GPE_CUDA_STRICT_FP": "ON",
+        "GPE_BUILD_CPU_REFERENCE": "OFF"
+      }
+    },
+    {
+      "name": "windows-ninja-with-cpu-reference",
+      "inherits": "windows-ninja",
+      "displayName": "Windows MSVC + Ninja + CUDA + untouched MKL CPU reference",
+      "cacheVariables": {
+        "GPE_BUILD_CPU_REFERENCE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-ninja",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-release-with-cpu-reference",
+      "configurePreset": "windows-ninja-with-cpu-reference",
+      "configuration": "Release"
+    }
+  ]
+}

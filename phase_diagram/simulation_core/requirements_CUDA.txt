@@ -1,0 +1,6 @@
+# Codex CUDA Port: Python orchestration and analysis dependencies only.
+numpy>=2.0
+scipy>=1.14
+tables>=3.10
+matplotlib>=3.9
+mkl-devel==2026.1.0; platform_system == "Windows"

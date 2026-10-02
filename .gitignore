@@ -1,0 +1,44 @@
+# Codex CUDA Port: generated build, run, and validation artifacts.
+build/
+.venv/
+results_cuda/
+validation/results/
+**/__pycache__/
+*.pyc
+*.pyo
+*.log
+SETUP_WINDOWS.log
+.vs/
+.DS_Store
+update_backups/
+
+# The following directories are byte-for-byte baseline/reference material. The
+# CUDA port tracks its additions, provenance hashes, and documentation instead
+# of duplicating hundreds of megabytes of historical data in Git objects.
+/single_run_simulation/
+/reference/gpe1d_2-master/*
+!/reference/gpe1d_2-master/gpe1d_2/
+/reference/gpe1d_2-master/gpe1d_2/*
+!/reference/gpe1d_2-master/gpe1d_2/array_tools.cpp
+!/reference/gpe1d_2-master/gpe1d_2/array_tools.h
+!/reference/gpe1d_2-master/gpe1d_2/config.cpp
+!/reference/gpe1d_2-master/gpe1d_2/config.h
+!/reference/gpe1d_2-master/gpe1d_2/dynamic_potential_1d.cpp
+!/reference/gpe1d_2-master/gpe1d_2/dynamic_potential_1d.h
+!/reference/gpe1d_2-master/gpe1d_2/file_tools.cpp
+!/reference/gpe1d_2-master/gpe1d_2/file_tools.h
+!/reference/gpe1d_2-master/gpe1d_2/math_routines_1d.cpp
+!/reference/gpe1d_2-master/gpe1d_2/math_routines_1d.h
+/phase_diagram/*
+!/phase_diagram/simulation_core/
+/phase_diagram/simulation_core/*
+!/phase_diagram/simulation_core/config_value.py
+!/phase_diagram/simulation_core/create_initial_state_function.py
+!/phase_diagram/simulation_core/cuda_workflow_common.py
+!/phase_diagram/simulation_core/gpe1d.config
+!/phase_diagram/simulation_core/run_phase_diagram_CUDA.py
+!/phase_diagram/simulation_core/run_single_CUDA.py
+!/phase_diagram/simulation_core/make_phase_diagram_CUDA.py
+!/phase_diagram/simulation_core/requirements_CUDA.txt
+!/phase_diagram/simulation_core/compact_sweep.py
+!/phase_diagram/simulation_core/phase_metric.py

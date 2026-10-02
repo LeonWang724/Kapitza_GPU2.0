@@ -1,0 +1,72 @@
+{
+  "_codex_cuda_port": "Short-time validation cases for the native CUDA solver.",
+  "defaults": {
+    "iterations": 40,
+    "save_every": 1,
+    "show_every": 1,
+    "wavefunction_relative_l2_tolerance": 1e-8,
+    "density_max_absolute_tolerance": 1e-10,
+    "norm_absolute_tolerance": 1e-11,
+    "energy_relative_tolerance": 5e-6
+  },
+  "cases": [
+    {
+      "name": "static_no_floquet",
+      "alpha": 0.0,
+      "frequency_hz": 0.0,
+      "floquet_enabled": false,
+      "floquet_mode": "legacy"
+    },
+    {
+      "name": "zero_alpha_driven",
+      "alpha": 0.0,
+      "frequency_hz": 1000000.0,
+      "floquet_enabled": true,
+      "floquet_mode": "legacy"
+    },
+    {
+      "name": "driven_legacy",
+      "alpha": 10.0,
+      "frequency_hz": 1000000.0,
+      "floquet_enabled": true,
+      "floquet_mode": "legacy"
+    },
+    {
+      "name": "driven_physical",
+      "alpha": 10.0,
+      "frequency_hz": 1000000.0,
+      "floquet_enabled": true,
+      "floquet_mode": "physical"
+    },
+    {
+      "name": "very_short_frequent_snapshots",
+      "alpha": 10.0,
+      "frequency_hz": 1000000.0,
+      "floquet_enabled": true,
+      "floquet_mode": "legacy",
+      "iterations": 8,
+      "save_every": 1,
+      "show_every": 1
+    },
+    {
+      "name": "corr_probe_nonunit_step_x",
+      "alpha": 10.0,
+      "frequency_hz": 1000000.0,
+      "floquet_enabled": true,
+      "floquet_mode": "legacy",
+      "iterations": 8,
+      "save_every": 1,
+      "show_every": 1,
+      "step_x": 0.5
+    }
+  ],
+  "small_grid": {
+    "alpha_values": [0.0, 10.0, 20.0],
+    "frequency_hz_values": [0.0, 750000.0, 1500000.0],
+    "iterations": 300,
+    "save_every": 10,
+    "show_every": 10,
+    "final_snapshot_count": 30,
+    "cut_points_each_edge": 100
+  }
+}
