@@ -60,6 +60,8 @@ not implemented.
 
 - Launchers select the project's Python environment explicitly.
 - CUDA runtime lookup includes both `bin` and `bin\x64`.
+- Launchers honor `CUDA_PATH`, so Pascal GPUs can select CUDA 12.9 even with CUDA
+  13.3 installed. See the [compute_61 build fix](README_CUDA.md#pascal-gpu-unsupported-gpu-architecture-compute_61).
 - Build temporary files use a path without spaces.
 - Builds refresh CMake configuration to avoid stale CUDA compiler paths.
 - Short analysis filenames avoid duplicating long dataset names.

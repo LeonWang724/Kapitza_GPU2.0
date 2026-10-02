@@ -19,9 +19,9 @@ The validated delivery scope is the 1D phase-diagram path with `dynamic_potentia
 
 ## Windows prerequisites
 
-- 64-bit Windows 11 and the current NVIDIA driver for the RTX 5090.
+- 64-bit Windows 11 and an NVIDIA driver supporting your GPU and selected toolkit.
 - Visual Studio 2022 with **Desktop development with C++**, MSVC x64 tools, and a Windows SDK.
-- NVIDIA CUDA Toolkit 13.3 or another toolkit explicitly supporting the installed driver, RTX 5090, and Visual Studio compiler. NVIDIA's current Windows guide lists Visual Studio 2022 as supported: https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/
+- NVIDIA CUDA Toolkit supporting your GPU, driver, and Visual Studio compiler. Use CUDA 12.9 for Pascal GPUs (including compute capability 6.1); CUDA 13 removed compilation support for architectures older than Turing (7.5). See [NVIDIA's release notes](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html#deprecated-architectures). CUDA 13.3 is suitable for supported newer GPUs, including the RTX 5090.
 - CMake 3.27 or newer. The preset uses `CMAKE_CUDA_ARCHITECTURES=native`, documented by CMake 3.24 and later: https://cmake.org/cmake/help/latest/prop_tgt/CUDA_ARCHITECTURES.html
 - Ninja 1.11 or newer. The `Ninja Multi-Config` generator uses the MSVC and CUDA compiler environment loaded by `LOAD_CUDA_ENV.bat`.
 - A 64-bit HDF5 development installation containing `include`, `lib`, and runtime `bin` directories. Set `HDF5_ROOT` to that installation. The HDF Group's official CMake guide documents `HDF5_ROOT` and the Windows runtime path: https://github.com/HDFGroup/hdf5/blob/develop/docs/INSTALL_CMake.md
@@ -62,8 +62,9 @@ environment. A special VS command prompt and manual PATH editing are no longer
 required.
 
 The loaders explicitly select this project's `.venv` interpreter, include both
-CUDA `bin` and `bin\x64` runtime directories, and prefer the installed CUDA 13.3
-toolkit over stale terminal settings. Build/check commands use
+CUDA `bin` and `bin\x64` runtime directories, and honor a valid `CUDA_PATH`.
+When it is unset or invalid, the loader searches the standard toolkit locations.
+Build/check commands use
 `%PUBLIC%\KapitzaCudaTemp` for temporary files, avoiding spaces in Windows user
 names. Set `GPE_CUDA_TEMP` to another writable path without spaces if needed.
 Global Windows TEMP/TMP settings are not changed. Builds refresh CMake's
@@ -72,6 +73,31 @@ configuration so an old cached compiler cannot silently remain selected.
 The build uses CMake's `Ninja Multi-Config` generator with MSVC and `nvcc`.
 This intentionally avoids a dependency on NVIDIA's optional Visual Studio
 MSBuild Build Customizations, which are not required for this command-line build.
+
+### Pascal GPU: `Unsupported gpu architecture 'compute_61'`
+
+The `native` architecture preset detected a compute-capability 6.1 GPU, but CUDA
+13 cannot compile for it. Install [CUDA Toolkit 12.9 Update 1](https://developer.nvidia.com/cuda-12-9-1-download-archive)
+if needed, then select it in PowerShell before building and running:
+
+```powershell
+$env:CUDA_PATH = "$env:ProgramFiles\NVIDIA GPU Computing Toolkit\CUDA\v12.9"
+if (!(Test-Path "$env:CUDA_PATH\bin\nvcc.exe")) { throw "Install CUDA Toolkit 12.9 first." }
+.\BUILD_CUDA.bat
+.\VALIDATE_COMPACT_CUDA.bat
+```
+
+Keep using this terminal for the run launchers, or save this selection for future
+terminals after confirming that CUDA 12.9 is installed:
+
+```powershell
+[Environment]::SetEnvironmentVariable('CUDA_PATH', $env:CUDA_PATH, 'User')
+```
+
+The general setup installer still defaults to CUDA 13.3.1; it is not necessary to
+rerun it to switch between already installed toolkits. Select 12.9 again after
+running setup on a Pascal machine. Do not set a newer architecture to bypass the
+error: the binary must support the GPU that will execute it.
 
 ## Build
 

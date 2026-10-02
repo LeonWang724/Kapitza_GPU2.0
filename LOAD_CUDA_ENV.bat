@@ -16,8 +16,8 @@ if exist "%~dp0.venv\Library\lib\cmake\mkl\MKLConfig.cmake" (
   set "PATH=%~dp0.venv\Library\bin;%PATH%"
 )
 
-@REM Prefer the toolkit installed by SETUP over a stale terminal's CUDA_PATH.
-if exist "%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v13.3\bin\nvcc.exe" set "CUDA_PATH=%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v13.3"
+@REM Honor a valid CUDA_PATH for both compilation and runtime DLL lookup.
+@REM Pascal GPUs need CUDA 12.x; an installed 13.3 must not override that choice.
 if defined CUDA_PATH if not exist "%CUDA_PATH%\bin\nvcc.exe" set "CUDA_PATH="
 if not defined CUDA_PATH if exist "%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v13.3\bin\nvcc.exe" set "CUDA_PATH=%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v13.3"
 if not defined CUDA_PATH if exist "%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v13.2\bin\nvcc.exe" set "CUDA_PATH=%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v13.2"
