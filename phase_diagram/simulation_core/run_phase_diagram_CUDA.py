@@ -48,6 +48,11 @@ NUMBER_OF_TABS = 1
 FLOQUET_MODE = "physical"
 CUDA_DEVICE = 0
 
+# Grid points each tab simulates together as one GPU batch (1 to 64). The
+# points evolve side by side with unchanged numerics; larger batches keep a big
+# GPU busy. BENCHMARK_CUDA.bat measures the fastest value for your GPU.
+POINTS_PER_BATCH = 8
+
 
 def unique_results_directory() -> Path:
     timestamp = datetime.now(timezone.utc).strftime("cuda_%Y%m%dT%H%M%SZ")
@@ -67,6 +72,10 @@ def main() -> int:
     parser.add_argument("--device", type=int, default=CUDA_DEVICE)
     parser.add_argument("--tabs", type=int, default=NUMBER_OF_TABS,
                         help="override NUMBER_OF_TABS in the settings above")
+    parser.add_argument("--batch", type=int, default=POINTS_PER_BATCH,
+                        help="override POINTS_PER_BATCH (grid points per GPU batch)")
+    parser.add_argument("--reference-loop", action="store_true",
+                        help="use the original, slower solver loop, one point at a time")
     parser.add_argument("--plan", action="store_true",
                         help="show point assignments without launching simulations")
     parser.add_argument("--headless", action="store_true",
@@ -84,9 +93,15 @@ def main() -> int:
     arguments = parser.parse_args()
     if isinstance(arguments.tabs, bool) or not isinstance(arguments.tabs, int) or arguments.tabs <= 0:
         parser.error("NUMBER_OF_TABS / --tabs must be a positive integer.")
+    if isinstance(arguments.batch, bool) or not isinstance(arguments.batch, int) or arguments.batch <= 0:
+        parser.error("POINTS_PER_BATCH / --batch must be a positive integer.")
+    # Snapshot output and the reference loop keep one point per solver run.
+    batch = 1 if arguments.storage == "full" or arguments.reference_loop else arguments.batch
     total = len(ALPHA_VALUES) * len(DRIVE_FREQUENCY_HZ_VALUES)
     assignments = split_point_ranges(total, arguments.tabs)
     print_assignments(total, arguments.tabs, assignments)
+    if batch > 1:
+        print(f"Each tab simulates up to {batch} grid points at a time as one GPU batch.")
     if arguments.plan:
         return 0
 
@@ -102,6 +117,21 @@ def main() -> int:
             "This executable does not support the new variance/std columns. "
             "Run BUILD_CUDA.bat, then VALIDATE_COMPACT_CUDA.bat before starting the scan."
         )
+    fused = build_info.get("fused_solver_version") == 1
+    if (arguments.storage == "compact" or arguments.reference_loop) and not fused:
+        raise RuntimeError(
+            "This executable predates the faster fused solver. Run BUILD_CUDA.bat, "
+            "then VALIDATE_FAST_CUDA.bat, before starting the scan."
+        )
+    if batch > int(build_info.get("max_batch_systems", 1)):
+        raise RuntimeError(
+            f"--batch {batch} exceeds this executable's limit of "
+            f"{build_info.get('max_batch_systems', 1)} points per GPU batch."
+        )
+    # Sleeping instead of spinning while waiting for the GPU leaves CPU power
+    # and thermal headroom to the GPU, especially with several tabs.
+    extra_arguments = (["--wait", "blocking"] if fused else []) + (
+        ["--reference-loop"] if arguments.reference_loop else [])
     results_root = arguments.results.resolve() if arguments.results else unique_results_directory()
     if results_root.exists() and any(results_root.iterdir()):
         raise FileExistsError(f"Results directory must be absent or empty: {results_root}")
@@ -132,6 +162,9 @@ def main() -> int:
             "device_index": arguments.device,
             "floquet_mode": arguments.floquet_mode,
             "compatibility_default_confirmed": True,
+            "loop": "reference" if arguments.reference_loop or not fused else "fused",
+            "points_per_batch": batch,
+            "extra_arguments": extra_arguments,
         },
         "source_tree": git_provenance(PORT_ROOT),
         "parameter_grid": {

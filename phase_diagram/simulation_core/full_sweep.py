@@ -23,6 +23,8 @@ def run_full_sweep(
     manifest["runs"] = []
     manifest["completed_points"] = 0
     manifest["simulation_config"] = read_config(base_config)
+    extra_arguments = [str(argument) for argument in
+                       manifest.get("solver", {}).get("extra_arguments", [])]
     for index, alpha_index, frequency_index, alpha, frequency in grid_points(manifest):
         output = results_root / f"out_{index:03d}"
         inputs_directory = results_root / "inputs" / f"run_{index:03d}"
@@ -69,7 +71,7 @@ def run_full_sweep(
             write_json_atomic(manifest_path, manifest)
             code = run_logged(
                 [str(executable), str(config), "--device", str(device),
-                 "--floquet-mode", floquet_mode], results_root, log,
+                 "--floquet-mode", floquet_mode, *extra_arguments], results_root, log,
             )
             record["return_code"] = code
             if code != 0:

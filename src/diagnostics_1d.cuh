@@ -30,6 +30,17 @@ public:
     double cropped_density_squared_sum(const cuDoubleComplex* psi, int cut);
     double phase_statistics(const cuDoubleComplex* psi, int cut, SpatialMoments& spatial);
 
+    // Asynchronous forms for the fused solver: the kernels and reductions of
+    // norm(), energy(), initial_density_overlap() and phase_statistics(), with
+    // each sum left in device memory at the indices of diagnostic_sums.h.
+    void enqueue_status_sums(const cuDoubleComplex* psi,
+                             const cuDoubleComplex* potential,
+                             const double* k_squared, cufftHandle fft_plan,
+                             double* device_sums);
+    void enqueue_phase_sums(const cuDoubleComplex* psi, int cut, double* device_sums);
+    // Centered second pass over the density of the last enqueued psi.
+    void enqueue_variance_sum(int cut, double mean_x, double* device_sums);
+
 private:
     int points_;
     double step_x_;

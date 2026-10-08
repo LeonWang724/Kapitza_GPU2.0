@@ -35,56 +35,79 @@ FAKE_SOLVER = '''#!/usr/bin/env python3
 import json, math, os, sys, time
 from pathlib import Path
 if "--version-json" in sys.argv:
-    print(json.dumps({"compact_phase_metric_version": 1, "phase_statistics_version": 1})); raise SystemExit(0)
+    print(json.dumps({"compact_phase_metric_version": 1, "phase_statistics_version": 1,
+                      "fused_solver_version": 1, "max_batch_systems": 64})); raise SystemExit(0)
 if "--device-info" in sys.argv:
     print(json.dumps({"device_index": 0, "name": "Test solver"})); raise SystemExit(0)
-config = {}
-for line in Path(sys.argv[1]).read_text().splitlines():
-    if "=" in line:
-        key, value = line.split("=", 1); config[key.strip()] = value.strip()
-for key in ("initial_state_file", "potential_file", "floquet_potential_file"):
-    assert Path(config[key]).is_file(), key
-events = Path(config["test_events"])
+
+def read(path):
+    config = {}
+    for line in Path(path).read_text().splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1); config[key.strip()] = value.strip()
+    return config
+
+def solve(config):
+    iterations = int(float(config["number_of_iterations"]))
+    stride = int(float(config["save_every_nth_iteration"]))
+    schedule = list(range(0, iterations, stride))
+    value = float(config["floquet_omega"])
+    if config.get("phase_metric_file"):
+        count = int(config["phase_metric_final_snapshot_count"])
+        cut = int(config["phase_metric_cut_points_each_edge"])
+        selected = schedule[-count:]
+        summary = {"metric": "mean_discrete_sum_abs_psi_fourth_power", "value": value,
+                   "snapshots_averaged": len(selected), "cut_points_each_edge": cut,
+                   "first_snapshot_iteration": selected[0], "last_snapshot_iteration": selected[-1],
+                   "save_every_nth_iteration": stride, "number_of_iterations": iterations}
+        step = float(config["step_x"])
+        interior = int(config["points_x"]) - 2 * cut
+        variance = step * step * (interior * interior - 1) / 12
+        summary.update(statistics_version=1, metric_std=0.0, metric_variance=0.0,
+                       x_mean=-0.5 * step, x_squared_mean=variance + 0.25 * step * step,
+                       sigma_x_squared=variance, sigma_x=math.sqrt(variance),
+                       x_mean_time_std=0.0, spatial_snapshots_averaged=len(selected))
+        Path(config["phase_metric_file"]).write_text(json.dumps(summary))
+    else:
+        import numpy as np, tables as tb
+        points = int(config["points_x"])
+        state = np.full(points, (value / (points - 200)) ** 0.25)
+        for iteration in schedule:
+            output = Path(config["output_folder"]) / f"{iteration:016d}.h5"
+            with tb.open_file(output, "w") as handle:
+                handle.create_array("/", "REAL", state)
+                handle.create_array("/", "IMAGINARY", np.zeros(points))
+    Path(config["status_file"]).write_text("status\\n")
+
+# Like gpe1d_cuda.exe, every argument before the first option is a config;
+# several configs form one GPU batch.
+paths = []
+for argument in sys.argv[1:]:
+    if argument.startswith("--"):
+        break
+    paths.append(argument)
+options = sys.argv[1 + len(paths):]
+configs = [read(path) for path in paths]
+for config in configs:
+    for key in ("initial_state_file", "potential_file", "floquet_potential_file"):
+        assert Path(config[key]).is_file(), key
+events = Path(configs[0]["test_events"])
+
 def event(kind):
-    data = json.dumps({"kind": kind, "time": time.monotonic(), "pid": os.getpid(),
-                       "config": sys.argv[1], "input": config["initial_state_file"]}) + "\\n"
-    fd = os.open(events, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-    os.write(fd, data.encode()); os.close(fd)
+    for path, config in zip(paths, configs):
+        data = json.dumps({"kind": kind, "time": time.monotonic(), "pid": os.getpid(),
+                           "config": path, "input": config["initial_state_file"],
+                           "batch": len(paths), "options": options}) + "\\n"
+        fd = os.open(events, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        os.write(fd, data.encode()); os.close(fd)
+
 event("start")
-failing = config.get("test_fail") == "true" and "tab_001" in Path(sys.argv[1]).parts
-time.sleep(0.5 if config.get("test_fail") != "true" or failing else 5)
+failing = configs[0].get("test_fail") == "true" and any("tab_001" in Path(path).parts for path in paths)
+time.sleep(0.5 if configs[0].get("test_fail") != "true" or failing else 5)
 if failing:
     print("Intentional solver failure", flush=True); raise SystemExit(7)
-iterations = int(float(config["number_of_iterations"]))
-stride = int(float(config["save_every_nth_iteration"]))
-schedule = list(range(0, iterations, stride))
-value = float(config["floquet_omega"])
-if config.get("phase_metric_file"):
-    count = int(config["phase_metric_final_snapshot_count"])
-    cut = int(config["phase_metric_cut_points_each_edge"])
-    selected = schedule[-count:]
-    summary = {"metric": "mean_discrete_sum_abs_psi_fourth_power", "value": value,
-               "snapshots_averaged": len(selected), "cut_points_each_edge": cut,
-               "first_snapshot_iteration": selected[0], "last_snapshot_iteration": selected[-1],
-               "save_every_nth_iteration": stride, "number_of_iterations": iterations}
-    step = float(config["step_x"])
-    interior = int(config["points_x"]) - 2 * cut
-    variance = step * step * (interior * interior - 1) / 12
-    summary.update(statistics_version=1, metric_std=0.0, metric_variance=0.0,
-                   x_mean=-0.5 * step, x_squared_mean=variance + 0.25 * step * step,
-                   sigma_x_squared=variance, sigma_x=math.sqrt(variance),
-                   x_mean_time_std=0.0, spatial_snapshots_averaged=len(selected))
-    Path(config["phase_metric_file"]).write_text(json.dumps(summary))
-else:
-    import numpy as np, tables as tb
-    points = int(config["points_x"])
-    state = np.full(points, (value / (points - 200)) ** 0.25)
-    for iteration in schedule:
-        output = Path(config["output_folder"]) / f"{iteration:016d}.h5"
-        with tb.open_file(output, "w") as handle:
-            handle.create_array("/", "REAL", state)
-            handle.create_array("/", "IMAGINARY", np.zeros(points))
-Path(config["status_file"]).write_text("status\\n")
+for config in configs:
+    solve(config)
 event("end")
 '''
 
@@ -166,12 +189,13 @@ class ParallelIntegrationTests(unittest.TestCase):
         self.solver.chmod(0o755)
         self.results = self.root / "results with spaces"
 
-    def run_grid(self, storage="compact", fail=False, tabs=3, alpha_count=2):
+    def run_grid(self, storage="compact", fail=False, tabs=3, alpha_count=2, batch=1):
         if fail:
             with self.base.open("a") as stream:
                 stream.write("test_fail=true\n")
         with (patch.object(runner, "SCRIPT_DIRECTORY", self.core),
               patch.object(runner, "NUMBER_OF_TABS", tabs),
+              patch.object(runner, "POINTS_PER_BATCH", batch),
               patch.object(runner, "ALPHA_VALUES", np.linspace(1, 3, alpha_count)),
               patch.object(runner, "DRIVE_FREQUENCY_HZ_VALUES", np.array([10.0, 20.0])),
               patch.object(sys, "argv", ["runner", "--headless", "--storage", storage,
@@ -212,6 +236,28 @@ class ParallelIntegrationTests(unittest.TestCase):
         with np.load(outputs["npz"]) as data:
             self.assertEqual(data["metric_matrix"].shape, (2, 3))
             np.testing.assert_allclose(data["sigma_x_squared_matrix"], records[0]["metric_summary"]["sigma_x_squared"])
+
+    def test_batched_workers_run_points_together_and_merge_in_order(self):
+        # 10 points over 2 tabs of 5, in GPU batches of 2, 2 and 1 per tab.
+        self.assertEqual(self.run_grid(tabs=2, alpha_count=5, batch=2), 0)
+        parent = parallel_sweep.read_manifest(self.results / "run_manifest.json")
+        self.assertEqual(parent["status"], "completed")
+        self.assertEqual(parent["solver"]["points_per_batch"], 2)
+        records = [json.loads(line) for line in (self.results / "point_results.jsonl").read_text().splitlines()]
+        self.assertEqual([record["run_index"] for record in records], list(range(10)))
+        ratios = [record["metric_summary"]["value"] / record["drive_frequency_hz"] for record in records]
+        np.testing.assert_allclose(ratios, ratios[0], rtol=1e-14)
+        self.assertEqual([record.get("solver_batch", {}).get("size", 1) for record in records],
+                         [2, 2, 2, 2, 1] * 2)
+        starts = [json.loads(line) for line in self.events.read_text().splitlines()
+                  if json.loads(line)["kind"] == "start"]
+        self.assertEqual(sorted(event["batch"] for event in starts), [1, 1] + [2] * 8)
+        self.assertEqual(len({event["input"] for event in starts}), 4)
+        self.assertTrue(all(event["options"][-2:] == ["--wait", "blocking"] for event in starts))
+        with (self.results / "metrics.csv").open() as stream:
+            self.assertEqual([int(row["run_index"]) for row in csv.DictReader(stream)], list(range(10)))
+        self.assertFalse(list(self.results.rglob(".work_*")))
+        self.assertFalse(list(self.results.rglob("*.h5")))
 
     def test_uneven_full_workers_merge_paths_and_plot(self):
         self.assertEqual(self.run_grid(storage="full"), 0)

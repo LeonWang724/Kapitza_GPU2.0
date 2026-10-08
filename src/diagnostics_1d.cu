@@ -2,6 +2,7 @@
 #include "diagnostics_1d.cuh"
 
 #include "cuda_checks.cuh"
+#include "diagnostic_sums.h"
 #include "kernels_1d.cuh"
 
 #include <stdexcept>
@@ -98,4 +99,51 @@ double Diagnostics1D::phase_statistics(const cuDoubleComplex* psi, int cut,
                                  step_x_, spatial.mean_x);
     spatial.variance_x = reducer_.sum(terms_a_.data() + cut, count) / spatial.mass;
     return metric;
+}
+
+void Diagnostics1D::enqueue_status_sums(const cuDoubleComplex* psi,
+                                        const cuDoubleComplex* potential,
+                                        const double* k_squared,
+                                        cufftHandle fft_plan,
+                                        double* device_sums) {
+    // One density serves norm, energy and overlap; each was |psi|^2 of psi.
+    launch_density(psi, density_.data(), points_);
+    reducer_.sum_into(density_.data(), points_, device_sums + kNormSum);
+    CUFFT_CHECK(cufftExecZ2Z(fft_plan,
+                             const_cast<cuDoubleComplex*>(psi),
+                             diagnostic_fft_.data(), CUFFT_FORWARD));
+    launch_kinetic_terms(diagnostic_fft_.data(), k_squared, terms_a_.data(), points_);
+    reducer_.sum_into(terms_a_.data(), points_, device_sums + kKineticSum);
+    launch_energy_terms(density_.data(), potential, terms_a_.data(),
+                        terms_b_.data(), points_);
+    reducer_.sum_into(terms_a_.data(), points_, device_sums + kPotentialSum);
+    reducer_.sum_into(terms_b_.data(), points_, device_sums + kInteractionSum);
+    launch_overlap_terms(initial_density_.data(), density_.data(),
+                         terms_a_.data(), points_);
+    reducer_.sum_into(terms_a_.data(), points_, device_sums + kOverlapSum);
+}
+
+void Diagnostics1D::enqueue_phase_sums(const cuDoubleComplex* psi, int cut,
+                                       double* device_sums) {
+    if (cut < 0 || cut > (points_ - 1) / 2) {
+        throw std::runtime_error("Spatial cut removes all metric points.");
+    }
+    const int count = points_ - 2 * cut;
+    launch_density(psi, density_.data(), points_);
+    launch_overlap_terms(density_.data(), density_.data(), terms_a_.data(), points_);
+    reducer_.sum_into(terms_a_.data() + cut, count, device_sums + kMetricSum);
+    reducer_.sum_into(density_.data() + cut, count, device_sums + kMassSum);
+    // Moments of a zero-mass window are computed but never used.
+    launch_spatial_moment_terms(density_.data(), terms_a_.data(), terms_b_.data(),
+                               points_, step_x_);
+    reducer_.sum_into(terms_a_.data() + cut, count, device_sums + kFirstMomentSum);
+    reducer_.sum_into(terms_b_.data() + cut, count, device_sums + kSecondMomentSum);
+}
+
+void Diagnostics1D::enqueue_variance_sum(int cut, double mean_x,
+                                         double* device_sums) {
+    const int count = points_ - 2 * cut;
+    launch_spatial_variance_terms(density_.data(), terms_a_.data(), points_,
+                                 step_x_, mean_x);
+    reducer_.sum_into(terms_a_.data() + cut, count, device_sums + kVarianceSum);
 }

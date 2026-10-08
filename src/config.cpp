@@ -5,6 +5,7 @@
 #include <cctype>
 #include <fstream>
 #include <limits>
+#include <set>
 #include <stdexcept>
 
 namespace {
@@ -180,5 +181,59 @@ void validate_1d_config(const ConfigData& config) {
     if (config.floquet_potential && config.floquet_potential_file.empty()) {
         throw std::runtime_error(
             "floquet_potential_file is required when floquet_potential=true.");
+    }
+}
+
+void validate_batch_compatible(const std::vector<ConfigData>& configs) {
+    if (configs.empty()) {
+        throw std::runtime_error("A batch needs at least one config.");
+    }
+    const ConfigData& first = configs.front();
+    const bool compact = !first.phase_metric_file.empty();
+    std::set<std::string> status_files;
+    std::set<std::string> outputs;
+    for (std::size_t index = 0; index < configs.size(); ++index) {
+        const ConfigData& config = configs[index];
+        const auto require = [&](bool same, const char* key) {
+            if (!same) {
+                throw std::runtime_error("Batched config " + std::to_string(index + 1) +
+                                         " differs from the first in " + key + ".");
+            }
+        };
+        require(config.dimension == first.dimension, "dimension");
+        require(config.points_x == first.points_x, "points_x");
+        require(config.step_x == first.step_x, "step_x");
+        require(config.time_step == first.time_step, "time_step");
+        require(config.beta == first.beta, "beta");
+        require(config.number_of_iterations == first.number_of_iterations,
+                "number_of_iterations");
+        require(config.save_every_nth_iteration == first.save_every_nth_iteration,
+                "save_every_nth_iteration");
+        require(config.show_stats_every_nth_iteration ==
+                    first.show_stats_every_nth_iteration,
+                "show_stats_every_nth_iteration");
+        require(config.imaginary_time == first.imaginary_time, "imaginary_time");
+        require(config.dynamic_potential == first.dynamic_potential, "dynamic_potential");
+        require(config.floquet_potential == first.floquet_potential, "floquet_potential");
+        require(config.save_potential == first.save_potential, "dp_save_potential");
+        require(config.phase_metric_file.empty() != compact, "phase_metric_file (output mode)");
+        require(config.phase_metric_final_snapshot_count ==
+                    first.phase_metric_final_snapshot_count,
+                "phase_metric_final_snapshot_count");
+        require(config.phase_metric_cut_points_each_edge ==
+                    first.phase_metric_cut_points_each_edge,
+                "phase_metric_cut_points_each_edge");
+
+        // Every system writes its own results.
+        const auto unique = [&](std::set<std::string>& seen,
+                                const std::filesystem::path& path, const char* key) {
+            if (!seen.insert(path.lexically_normal().string()).second) {
+                throw std::runtime_error("Batched configs share the same " +
+                                         std::string(key) + ".");
+            }
+        };
+        unique(status_files, config.status_file, "status_file");
+        unique(outputs, compact ? config.phase_metric_file : config.output_folder,
+               compact ? "phase_metric_file" : "output_folder");
     }
 }

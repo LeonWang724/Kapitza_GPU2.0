@@ -13,6 +13,7 @@ cd Kapitza_GPU2.0
 .\SETUP_WINDOWS.bat
 .\BUILD_CUDA.bat
 .\VALIDATE_COMPACT_CUDA.bat
+.\VALIDATE_FAST_CUDA.bat
 ```
 
 Run each command after the previous command finishes successfully. Setup installs
@@ -24,6 +25,55 @@ Then edit the physical parameter section in
 .\RUN_PHASE_DIAGRAM_CUDA.bat
 .\MAKE_PHASE_DIAGRAM_CUDA.bat
 ```
+
+## Faster solver: fused steps and GPU batches
+
+The solver evolves the same equation with the same complex128 split-step
+method, potentials, time step, grid, FFT normalization and observables. Only
+the scheduling of the GPU work changed:
+
+- **Fused steps.** The two half steps that meet between consecutive iterations
+  run in one GPU pass, with the Floquet potential computed inline. A step now
+  launches 2 small kernels and 2 FFTs instead of 6 kernels and 2 FFTs.
+- **No repeated exponentials.** With `beta=0` both half steps of an iteration
+  use the same factor `exp(-i dt V / 2)`, so it is computed once. `exp(0)=1`
+  is not evaluated where the potential is real (outside the absorbers).
+- **Bit-identical by construction.** Each value is produced by the same
+  operations in the same order as the original kernels. Results match the
+  original loop bit for bit; `VALIDATE_FAST_CUDA.bat` checks this on your GPU.
+- **GPU batches.** A 65,536-point system is too small to keep a GPU busy, and
+  Windows runs separate processes' kernels one at a time, so extra tabs mostly
+  fill gaps. `POINTS_PER_BATCH` (default 8) grid points now run side by side
+  in one solver process, using a batched cuFFT plan. A batched FFT may round
+  differently from a single one at the 1e-15 level; validation reports the
+  actual difference.
+- **Less waiting.** Diagnostics every 100 steps need one GPU-to-CPU transfer
+  instead of about five, and the sweep tells CUDA to sleep instead of spin
+  while waiting, which leaves a laptop's power budget to the GPU.
+
+After pulling this version, rebuild, validate and measure:
+
+```powershell
+.\BUILD_CUDA.bat
+.\VALIDATE_FAST_CUDA.bat
+.\BENCHMARK_CUDA.bat
+```
+
+The benchmark times the original loop and the fused loop at batch sizes 1 to
+32 on points from your configured grid, and prints the recommended
+`POINTS_PER_BATCH` and the projected scan time. Set that value next to
+`CUDA_DEVICE` in `run_phase_diagram_CUDA.py`, or pass it per run:
+
+```powershell
+.\RUN_PHASE_DIAGRAM_CUDA.bat --batch 16
+```
+
+With batching, `NUMBER_OF_TABS = 1` or `2` is usually best: two tabs hide
+input generation and process startup, more tabs share the same GPU time.
+`--reference-loop` runs the original one-point-at-a-time loop for comparison.
+Full storage (`--storage full`) always runs one point per solver call. Each
+point in a batch keeps its own inputs, configuration, status file and result
+row; a batch is recorded only when all of its points succeed.
 
 ## Split a scan across terminal tabs
 

@@ -2,6 +2,7 @@
 #include "build_info.h"
 #include "config.h"
 #include "cuda_checks.cuh"
+#include "fused_kernels_1d.cuh"
 #include "solver_1d.h"
 
 #include <cuda_runtime.h>
@@ -10,6 +11,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -19,6 +21,8 @@ void print_version_json() {
         << "  \"program\": \"gpe1d_cuda\",\n"
         << "  \"compact_phase_metric_version\": 1,\n"
         << "  \"phase_statistics_version\": 1,\n"
+        << "  \"fused_solver_version\": 1,\n"
+        << "  \"max_batch_systems\": " << kMaxBatchSystems << ",\n"
         << "  \"port_version\": \"" << GPE_PORT_VERSION << "\",\n"
         << "  \"git_commit\": \"" << GPE_GIT_COMMIT << "\",\n"
         << "  \"git_dirty\": " << GPE_GIT_DIRTY << ",\n"
@@ -58,9 +62,9 @@ void print_device_json(int selected_device) {
 
 int main(int argc, char* argv[]) {
     try {
-        std::filesystem::path config_path = "gpe1d.config";
+        // Several configs evolve together as one GPU batch.
+        std::vector<std::filesystem::path> config_paths;
         SolverOptions options;
-        bool config_was_set = false;
 
         for (int index = 1; index < argc; ++index) {
             const std::string argument = argv[index];
@@ -85,21 +89,32 @@ int main(int argc, char* argv[]) {
                 options.floquet_mode = parse_floquet_mode(argv[index]);
                 continue;
             }
+            if (argument == "--reference-loop") {
+                options.reference_loop = true;
+                continue;
+            }
+            if (argument == "--wait") {
+                if (++index >= argc) throw std::runtime_error("--wait requires a value.");
+                options.wait_mode = parse_wait_mode(argv[index]);
+                continue;
+            }
             if (!argument.empty() && argument.front() == '-') {
                 throw std::runtime_error("Unknown option: " + argument);
             }
-            if (config_was_set) {
-                throw std::runtime_error("Only one configuration path may be supplied.");
-            }
-            config_path = argument;
-            config_was_set = true;
+            config_paths.emplace_back(argument);
         }
 
-        if (!config_was_set) {
+        if (config_paths.empty()) {
             std::cout << "Using standard config file.\n";
+            config_paths.emplace_back("gpe1d.config");
         }
-        const ConfigData config = read_config(config_path);
-        run_solver_1d(config, options);
+        if (config_paths.size() == 1) {
+            run_solver_1d(read_config(config_paths.front()), options);
+            return 0;
+        }
+        std::vector<ConfigData> configs;
+        for (const auto& path : config_paths) configs.push_back(read_config(path));
+        run_solver_batch_1d(configs, options);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "gpe1d_cuda failed: " << error.what() << '\n';

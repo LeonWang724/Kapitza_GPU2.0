@@ -9,6 +9,8 @@ class GpuReducer {
 public:
     explicit GpuReducer(int maximum_count);
     double sum(const double* input, int count);
+    // Same reduction as sum(), written to device memory without synchronizing.
+    void sum_into(const double* input, int count, double* device_result);
 
 private:
     int maximum_count_;

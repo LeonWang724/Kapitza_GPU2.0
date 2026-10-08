@@ -28,3 +28,11 @@ double GpuReducer::sum(const double* input, int count) {
     return host_result;
 }
 
+void GpuReducer::sum_into(const double* input, int count, double* device_result) {
+    if (count <= 0 || count > maximum_count_) {
+        throw std::runtime_error("Reduction count is outside the allocated range.");
+    }
+    CUDA_CHECK(cub::DeviceReduce::Sum(temporary_.data(), temporary_bytes_, input,
+                                      device_result, count));
+}
+

@@ -19,6 +19,33 @@ The executable bundled with the source and the executable used by the phase-diag
 - Strict CUDA floating point disables FMA and does not enable fast math. CPU/CUDA FFT and reduction order can still produce roundoff differences.
 - The initial wavefunction/density tolerances use binary HDF5 values. Energy comparisons use the supplied CPU status CSV and therefore cannot demand more precision than its approximately six-significant-digit serialization; the initial energy relative threshold is `5e-6` and remains provisional until Windows data is available.
 
+## Fused and batched real-time loop
+
+- Real-time runs with the physical Floquet update use `run_fused_loop`
+  (`src/fused_loop.h`). The trailing half step of iteration n and the leading
+  half step of n+1 run in one pointwise kernel unless psi is observed between
+  them (metric sample, snapshot or status row). The original loop remains as
+  `--reference-loop` and still serves imaginary time and the legacy update.
+- Per-element arithmetic lives in `src/split_step_math.cuh` and repeats the
+  original kernel expressions operand for operand; the strict FP build keeps
+  FMA contraction off, so values are bitwise identical.
+- With `beta` equal to +0 or -0, the interaction term adds the same signed
+  zeros to both half-step exponents for every finite density, so the second
+  half step reuses the first half step's factor. `exp(+-0)` is exactly 1 and
+  is not evaluated.
+- Floquet factors keep the original sequence: `cos(omega * t_n)` with `t_n`
+  accumulated by repeated addition of `time_step`.
+- Status and phase-statistics reductions use the same CUB calls on the same
+  arrays; their sums stay on the GPU until one transfer per observation.
+- Several configs that differ only in inputs, outputs and `floquet_omega` can
+  run as one batch (`validate_batch_compatible`). The batched cuFFT plan may
+  round differently from a single transform; `validation/validate_fast_solver.py`
+  reports the difference. Diagnostics still transform one system at a time.
+- `tests/fused_solver_host_test.cpp` transcribes the original kernels and
+  checks bitwise agreement on the CPU over 84 schedules, batch sizes and
+  nonlinearities. `tests/cuda_host_stubs` lets clang type-check the CUDA
+  sources without the toolkit; neither replaces the Windows GPU validation.
+
 ## Phase-diagram quantity
 
 The latest historical scripts select the final 30 HDF5 snapshots, cut 100 points from both spatial edges, and ultimately overwrite a standard-deviation calculation with `sum(probability**2)`. The actual plotted value is therefore the mean unnormalized discrete `sum |psi|^4`, not standard deviation and not a continuum-normalized IPR. The new plotter preserves the alpha-outer/frequency-inner ordering, inverted frequency axis, inferno colormap, cut, and averaging. At the workflow owner's request, the displayed colorbar retains the historical `Standard Deviation of |psi|^2` wording; the manifest and this audit note retain the exact numerical definition. Files are numerically sorted instead of relying on unspecified `glob` order.

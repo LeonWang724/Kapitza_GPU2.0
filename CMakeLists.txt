@@ -46,6 +46,7 @@ add_executable(gpe1d_cuda
     src/kernels_1d.cu
     src/reductions.cu
     src/diagnostics_1d.cu
+    src/fused_kernels_1d.cu
     src/solver_1d.cu
 )
 

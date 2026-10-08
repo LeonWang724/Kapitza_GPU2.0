@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 struct ConfigData {
     int number_of_threads = 0;
@@ -56,3 +57,6 @@ struct ConfigData {
 
 ConfigData read_config(const std::filesystem::path& config_path);
 void validate_1d_config(const ConfigData& config);
+// Configs evolved together on the GPU may differ only in their input files,
+// output paths and drive frequency (floquet_omega).
+void validate_batch_compatible(const std::vector<ConfigData>& configs);
