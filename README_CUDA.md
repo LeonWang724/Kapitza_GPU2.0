@@ -36,6 +36,16 @@ Git, CMake, Ninja, the Visual Studio 2022 C++ build tools, CUDA Toolkit 13.3.1, 
 2.1.1, a project-local `.venv`, oneMKL, and all packages in `requirements_CUDA.txt`.
 The full transcript is saved as `SETUP_WINDOWS.log`.
 
+If WinGet reports `InternetOpenUrl()` / `0x80072f78` while installing Visual
+Studio, setup now tries Microsoft's official Visual Studio 2022 bootstrapper
+directly and verifies its Microsoft signature before running it. Existing
+Visual Studio 2022 C++ tools are detected before contacting WinGet for that
+package. Update your checkout with `git pull --ff-only`, then rerun
+`SETUP_WINDOWS.bat`. If the direct download also fails, open
+https://aka.ms/vs/17/release/vs_buildtools.exe in your browser, install
+**Desktop development with C++**, then rerun setup to install the remaining
+dependencies. See Microsoft's [installer documentation](https://learn.microsoft.com/en-us/visualstudio/install/use-command-line-parameters-to-install-visual-studio?view=vs-2022).
+
 Setup permanently adds the installed Python directory, Python `Scripts`, and
 the project `.venv\Scripts` directory to the current user's PATH. It records
 the selected interpreter in `GPE_PYTHON` and the project directory in

@@ -201,6 +201,55 @@ function Find-Hdf5Root {
     return $null
 }
 
+function Find-VisualStudio2022CppTools {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path $vswhere) {
+        & $vswhere -latest -version '[17.0,18.0)' -products '*' `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath | Select-Object -First 1
+    }
+}
+
+function Install-VisualStudioBuildTools {
+    if (Find-VisualStudio2022CppTools) {
+        Write-Host 'Visual Studio 2022 C++ tools are already installed; continuing with verification.'
+        return
+    }
+
+    try {
+        Install-WingetPackage -Id 'Microsoft.VisualStudio.2022.BuildTools' `
+            -Override '--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
+    }
+    catch {
+        Write-Host "WinGet could not install Visual Studio: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host 'Trying the official Microsoft Visual Studio 2022 installer directly...' -ForegroundColor Cyan
+        $downloadDirectory = Join-Path $env:TEMP 'gpe_cuda_solver_setup'
+        New-Item -ItemType Directory -Path $downloadDirectory -Force | Out-Null
+        $vsBootstrapper = Join-Path $downloadDirectory 'vs_buildtools_2022.exe'
+        try {
+            Download-File -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -Destination $vsBootstrapper
+            $signature = Get-AuthenticodeSignature -FilePath $vsBootstrapper
+            if ($signature.Status -ne 'Valid' -or
+                $signature.SignerCertificate.Subject -notmatch '(^|,\s*)O=Microsoft Corporation(,|$)') {
+                throw 'The Visual Studio installer does not have a valid Microsoft signature.'
+            }
+        }
+        catch {
+            Remove-Item -Path $vsBootstrapper -Force -ErrorAction SilentlyContinue
+            throw "Visual Studio download failed: $($_.Exception.Message) Download https://aka.ms/vs/17/release/vs_buildtools.exe in your browser, install Desktop development with C++, then rerun SETUP_WINDOWS.bat."
+        }
+        $vsProcess = Start-Process -FilePath $vsBootstrapper `
+            -ArgumentList '--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended' `
+            -Wait -PassThru
+        if ($vsProcess.ExitCode -eq 3010) {
+            $script:restartRequired = $true
+        }
+        elseif ($vsProcess.ExitCode -ne 0) {
+            throw "Visual Studio Build Tools installer failed with exit code $($vsProcess.ExitCode)"
+        }
+    }
+}
+
 try {
     Write-Host 'Native CUDA solver Windows setup' -ForegroundColor Green
     Write-Host "Project: $PSScriptRoot"
@@ -216,8 +265,7 @@ try {
     Install-WingetPackage -Id 'Git.Git'
     Install-WingetPackage -Id 'Kitware.CMake'
     Install-WingetPackage -Id 'Ninja-build.Ninja'
-    Install-WingetPackage -Id 'Microsoft.VisualStudio.2022.BuildTools' `
-        -Override '--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
+    Install-VisualStudioBuildTools
 
     Refresh-ProcessPath
 
