@@ -1,15 +1,33 @@
-# Kapitza_GPU2.0
+# Kapitza_GPU3.0
+
+Version 3.0 adds cold-atom **Klein tunneling in an engineered bichromatic optical
+lattice**. It prepares a moving packet in the upper excited Bloch band, evolves
+it through a smooth barrier with the existing complex128 CUDA solver, and
+exports transmission, reflection, loss, spatial variance and scattering plots.
+See [README_KLEIN.md](README_KLEIN.md) for the model, settings and validation.
+
+From the `Kapitza_GPU3.0` folder on Windows:
+
+```powershell
+.\SETUP_WINDOWS.bat
+.\BUILD_CUDA.bat CUDA_ONLY
+.\VALIDATE_KLEIN_CUDA.bat
+.\RUN_KLEIN_CUDA.bat
+```
+
+The existing Kapitza phase-diagram workflow, tab splitting, statistics and
+fused/batched CUDA solver remain available below. This folder was copied from
+2.0 before adding the Klein workflow. Its inherited Git remote still names the
+2.0 repository; a separate 3.0 repository has not been published.
 
 Native CUDA simulation of a one-dimensional driven optical lattice, with compact
 phase-diagram output. This version builds on
 [Kapitza_Phase_Diagram_GPU](https://github.com/LeonWang724/Kapitza_Phase_Diagram_GPU)
 and keeps the complex128 split-step solver and existing phase-diagram metric.
 
-## Windows quick start
+## Existing Kapitza workflow on Windows
 
 ```powershell
-git clone https://github.com/LeonWang724/Kapitza_GPU2.0.git
-cd Kapitza_GPU2.0
 .\SETUP_WINDOWS.bat
 .\BUILD_CUDA.bat
 .\VALIDATE_COMPACT_CUDA.bat

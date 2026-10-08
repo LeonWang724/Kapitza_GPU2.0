@@ -2,6 +2,7 @@
 build/
 .venv/
 results_cuda/
+klein_tunneling/results/
 validation/results/
 **/__pycache__/
 *.pyc
