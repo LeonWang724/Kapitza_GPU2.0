@@ -36,6 +36,10 @@ int main(int argc, char** argv) {
                 for (int i : saved) expected += i + 0.25;
                 assert(sampled == saved.size());
                 assert(metric.mean() == expected / saved.size());
+                const double expected_variance = static_cast<double>(interval) * interval *
+                    (static_cast<double>(saved.size()) * saved.size() - 1.0) / 12.0;
+                assert(std::abs(metric.variance() - expected_variance) <=
+                       1e-12 * std::max(1.0, expected_variance));
             }
         }
     }
@@ -47,11 +51,20 @@ int main(int argc, char** argv) {
     must_throw([&] { sample.mean(); });
     must_throw([&] { sample.add(0, 1.0); });
     must_throw([&] { sample.add(10, std::numeric_limits<double>::quiet_NaN()); });
-    sample.add(10, 1.5);
+    sample.add(10, 1.5, SpatialMoments{2.0, -0.5, 0.5, 0.25});
     must_throw([&] { sample.add(10, 1.0); });
-    sample.add(20, 2.5);
+    sample.add(20, 2.5, SpatialMoments{4.0, 0.0, 0.25, 0.25});
     assert(sample.mean() == 2.0);
+    assert(sample.variance() == 0.25);
+    assert(sample.stddev() == 0.5);
     sample.write(argv[1]);
+    RunningMoments offset;
+    for (double value : {1.0e12, 1.0e12 + 1.0, 1.0e12 + 2.0}) offset.add(value);
+    assert(std::abs(offset.variance() - 2.0 / 3.0) < 1e-12);
+    PhaseMetricAccumulator zero(1, 100, 30, 0);
+    zero.add(0, 0.0, SpatialMoments{});
+    assert(zero.variance() == 0.0);
+    zero.write(std::string(argv[1]) + ".zero.json");
 
     const std::string config_path = std::string(argv[1]) + ".config";
     {

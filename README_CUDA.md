@@ -161,12 +161,30 @@ Keep `check_cuda.log`, `build_cuda.log`, `validation_console.log`, and the newes
 
 Edit only the marked physical parameter section near the top of
 `run_phase_diagram_CUDA.py`. `INITIAL_LATTICE_DEPTH_V0_ER` separately records
-the depth used to construct the initial Bloch state. Then run:
+the depth used to construct the initial Bloch state. `NUMBER_OF_TABS` in the same
+section selects how many terminal workers share the grid. The default `1` runs
+in the current terminal. Higher counts open Windows Terminal tabs, falling back
+to console windows when `wt.exe` is not available. Any positive integer works:
+10,000 points across 11 tabs gives one tab 910 points and ten tabs 909 each.
+Each worker has private inputs/configuration and disjoint global point indices;
+the coordinator combines results only after verifying every point exactly once.
+Keep the originating terminal open until all workers finish. Then run:
 
 ```bat
 RUN_PHASE_DIAGRAM_CUDA.bat
 MAKE_PHASE_DIAGRAM_CUDA.bat
 ```
+
+Use `RUN_PHASE_DIAGRAM_CUDA.bat --plan` to preview the assignments without GPU
+execution. `--tabs N` overrides `NUMBER_OF_TABS`; `--headless` runs workers in
+the background. Both compact and full storage support multiple workers. The
+parent dataset stores each worker under `workers/tab_###` and publishes the
+merged scalar table/journal (or full-output manifest paths) at the normal root.
+On failure or Ctrl+C, completed worker records and diagnostics remain available,
+but the parent is not marked complete. Automatic resume is not implemented.
+The tab launcher itself is Python-only, but the new statistics require rebuilding
+the CUDA executable as described below. Windows Terminal UI and real CUDA
+concurrency still require validation on the target machine.
 
 After updating an existing installation, rebuild once and first run:
 
@@ -182,13 +200,34 @@ not save the wavefunctions or potentials. The window still uses
 just as in the original solver. GPU reduction order can cause tiny floating-point
 differences from NumPy; the validation command checks the actual difference.
 
+The CSV now includes `metric_std`, `metric_variance`, `x_mean`, `x_squared_mean`,
+`sigma_x`, `sigma_x_squared`, `x_mean_time_std`, and `spatial_snapshots_averaged`.
+Spatial moments normalize the cropped `|psi|²` at each sample; positions are
+`(index - points_x // 2) * step_x` in solver length units. `sigma_x_squared` is
+the mean instantaneous centered spatial variance over the final window, and
+`sigma_x` is its square root. Center motion is measured separately by
+`x_mean_time_std`. Temporal variances use `ddof=0`; a single sample gives zero.
+Zero-mass samples are excluded from spatial moments, with null/blank values
+when none remain. These are fluctuation measurements, not standard errors.
+See the column definitions in [README.md](README.md#standard-deviations-and-spatial-variance).
+
+These diagnostics reuse GPU buffers and collect scalars only at the selected
+sample times. Compact output needs an executable advertising
+`phase_statistics_version=1`; the runner rejects an older binary before creating
+a dataset or opening tabs. Run `BUILD_CUDA.bat` and `VALIDATE_COMPACT_CUDA.bat`
+after updating. The validation compares all statistics with full snapshots.
+Old compact data retain the original mean and have blank new columns. Full
+snapshot analysis calculates the same statistics when grid spacing is available.
+
 Each dataset contains a `metrics.csv` with one row per point, an append-only
 `point_results.jsonl` with scalar results and per-point provenance, a small
 `run_manifest.json`, and one copy of the base config/input-generator source.
-Completed points are flushed to disk before temporary inputs are reused. A
-single scratch directory holds only the current point's inputs/status/log; it
-is removed after the sweep. A failure preserves that point's diagnostics in
-`failed_point` and leaves completed scalar records intact. Automatic resume is
+Completed points are flushed to disk before temporary inputs are reused. Each
+worker uses one scratch directory for its current point's inputs/status/log;
+it is removed after that worker's sweep. A failure preserves that point's
+diagnostics in the worker's `failed_point` folder and leaves completed scalar
+records intact. Parallel workers retain their own scalar journals; the parent
+table and journal are published after every worker completes. Automatic resume is
 not implemented; do not restart into a nonempty results directory.
 
 The 65,536-point defaults previously wrote about 700 MiB per grid point in field

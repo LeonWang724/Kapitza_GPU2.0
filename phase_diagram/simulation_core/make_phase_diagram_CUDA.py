@@ -13,8 +13,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tables as tb
 
-from cuda_workflow_common import RESULTS_DIRECTORY, phase_dataset_label
-from phase_metric import validate_summary
+from cuda_workflow_common import RESULTS_DIRECTORY, phase_dataset_label, read_config
+from phase_metric import CSV_FIELDS, STATISTICS_FIELDS, csv_row, statistics_from_probabilities
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +113,7 @@ def analyze(
     alpha_values = np.asarray(grid["alpha_values"], dtype=np.float64)
     frequency_values = np.asarray(grid["drive_frequency_hz_values"], dtype=np.float64)
     metric = np.full((frequency_values.size, alpha_values.size), np.nan)
+    statistics_matrices = {key: np.full_like(metric, np.nan) for key in STATISTICS_FIELDS}
 
     final_count = int(contract["final_snapshot_count"])
     cut = int(contract["cut_points_each_edge"])
@@ -132,9 +133,8 @@ def analyze(
         if run.get("status") != "completed":
             raise RuntimeError(f"Run {run['run_index']} is incomplete.")
         if compact:
-            mean_metric, samples_averaged = validate_summary(
-                run["metric_summary"], manifest["simulation_config"], contract
-            )
+            row = csv_row(run, run["metric_summary"], manifest["simulation_config"], contract)
+            mean_metric = row["metric"]
         else:
             output_directory = root / run["output_directory"]
             snapshots = sorted(
@@ -144,16 +144,18 @@ def analyze(
             if not snapshots:
                 raise FileNotFoundError(f"No snapshots in {output_directory}")
             selected = snapshots[-final_count:]
-            values = []
-            for snapshot in selected:
-                probability = read_probability(snapshot)
-                if probability.size <= 2 * cut:
-                    raise ValueError(f"Spatial cut removes all points from {snapshot}")
-                cropped = probability[cut:-cut] if cut else probability
-                # Preserve the historical discrete sum of |psi|^4, without dx.
-                values.append(float(np.sum(cropped * cropped)))
-            mean_metric = float(np.mean(values))
-            samples_averaged = len(selected)
+            config = manifest.get("simulation_config", {})
+            if "step_x" not in config and run.get("config_file"):
+                config = read_config(root / run["config_file"])
+            step_x = float(config["step_x"]) if "step_x" in config else None
+            if step_x is None and contract.get("statistics_version") == 1:
+                raise ValueError("Spatial statistics require the saved step_x grid spacing.")
+            statistics = statistics_from_probabilities(
+                (read_probability(snapshot) for snapshot in selected), cut=cut, step_x=step_x,
+            )
+            mean_metric = statistics["metric"]
+            row = {"run_index": run["run_index"], "alpha": run["alpha"],
+                   "drive_frequency_hz": run["drive_frequency_hz"], **statistics}
         alpha_index = int(run["alpha_index"])
         frequency_index = int(run["frequency_index"])
         if not (0 <= alpha_index < alpha_values.size and 0 <= frequency_index < frequency_values.size):
@@ -165,15 +167,10 @@ def analyze(
             raise ValueError("Grid point parameters do not match the manifest.")
         seen.add(coordinate)
         metric[frequency_index, alpha_index] = mean_metric
-        rows.append(
-            {
-                "run_index": run["run_index"],
-                "alpha": run["alpha"],
-                "drive_frequency_hz": run["drive_frequency_hz"],
-                "snapshots_averaged": samples_averaged,
-                "metric": mean_metric,
-            }
-        )
+        for key in STATISTICS_FIELDS:
+            if row[key] is not None:
+                statistics_matrices[key][frequency_index, alpha_index] = row[key]
+        rows.append(row)
         print(
             f"out_{run['run_index']:03d}: alpha={run['alpha']:.10g}, "
             f"frequency={run['drive_frequency_hz']:.10g} Hz, metric={mean_metric:.10g}"
@@ -197,9 +194,10 @@ def analyze(
         alpha_values=alpha_values,
         drive_frequency_hz_values=frequency_values,
         metric_matrix=metric,
+        **{f"{key}_matrix": value for key, value in statistics_matrices.items()},
     )
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
 

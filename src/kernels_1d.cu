@@ -146,6 +146,23 @@ __global__ void overlap_terms_kernel(const double* initial_density,
     }
 }
 
+__global__ void spatial_moment_terms_kernel(const double* density, double* first,
+                                           double* second, int points, double step_x) {
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= points) return;
+    const double x = static_cast<double>(index - points / 2) * step_x;
+    first[index] = density[index] * x;
+    second[index] = density[index] * x * x;
+}
+
+__global__ void spatial_variance_terms_kernel(const double* density, double* terms,
+                                             int points, double step_x, double mean_x) {
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= points) return;
+    const double centered = static_cast<double>(index - points / 2) * step_x - mean_x;
+    terms[index] = density[index] * centered * centered;
+}
+
 }  // namespace
 
 void launch_initialize_spectral(double* k_squared, cuDoubleComplex* k_propagator,
@@ -231,3 +248,16 @@ void launch_overlap_terms(const double* initial_density,
     CUDA_KERNEL_CHECK();
 }
 
+void launch_spatial_moment_terms(const double* density, double* first,
+                                double* second, int points, double step_x) {
+    spatial_moment_terms_kernel<<<blocks_for(points), kThreads>>>(
+        density, first, second, points, step_x);
+    CUDA_KERNEL_CHECK();
+}
+
+void launch_spatial_variance_terms(const double* density, double* terms,
+                                  int points, double step_x, double mean_x) {
+    spatial_variance_terms_kernel<<<blocks_for(points), kThreads>>>(
+        density, terms, points, step_x, mean_x);
+    CUDA_KERNEL_CHECK();
+}

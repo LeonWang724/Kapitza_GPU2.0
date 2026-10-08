@@ -71,12 +71,12 @@ class CompactStorageTests(unittest.TestCase):
         self.expected = np.zeros((2, 2))
         self.calls = 0
 
-    def generate(self, depth, alpha, frequency, phase, initial_depth):
+    def generate(self, depth, alpha, frequency, phase, initial_depth, *, output_directory, config_path):
         self.current = (alpha, frequency)
         values = np.arange(1, 13) * (alpha + frequency / 100) * (1 + 0.3j)
         self.current_states = [values, values * 2, values * 3]
         for name in ("lattice_gauss.h5", "vstatic.h5", "vflo.h5"):
-            state_file(self.core / "in" / name, values)
+            state_file(output_directory / name, values)
 
     def solve(self, command, cwd, log_path):
         generated = read_config(Path(command[1]))
@@ -112,7 +112,6 @@ class CompactStorageTests(unittest.TestCase):
     def run_sweep(self, solver=None):
         with (
             patch.object(compact_sweep, "SCRIPT_DIRECTORY", self.core),
-            patch.object(compact_sweep, "legacy_input_path", lambda name: self.core / "in" / name),
             patch.object(compact_sweep, "run_logged", solver or self.solve),
         ):
             compact_sweep.run_compact_sweep(
@@ -204,7 +203,19 @@ class CompactStorageTests(unittest.TestCase):
         ], check=True, capture_output=True, text=True)
         summary_path = self.root / "summary.json"
         subprocess.run([str(executable), str(summary_path)], check=True)
-        self.assertEqual(validate_summary(json.loads(summary_path.read_text()), self.config, self.contract), (2.0, 2))
+        summary = json.loads(summary_path.read_text())
+        self.assertEqual(validate_summary(summary, self.config, self.contract), (2.0, 2))
+        self.assertEqual(summary["metric_std"], 0.5)
+        self.assertEqual(summary["metric_variance"], 0.25)
+        self.assertEqual(summary["sigma_x_squared"], 0.25)
+        self.assertEqual(summary["sigma_x"], 0.5)
+        self.assertEqual(summary["x_mean_time_std"], 0.25)
+        self.assertEqual(summary["x_mean"], -0.25)
+        self.assertEqual(summary["x_squared_mean"], 0.375)
+        zero = json.loads(Path(str(summary_path) + ".zero.json").read_text())
+        self.assertEqual(zero["metric_std"], 0.0)
+        self.assertEqual(zero["spatial_snapshots_averaged"], 0)
+        self.assertIsNone(zero["sigma_x_squared"])
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,42 @@ from typing import Any
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 PORT_ROOT = SCRIPT_DIRECTORY.parents[1]
 RESULTS_DIRECTORY = SCRIPT_DIRECTORY / "results_cuda"
+
+
+def grid_points(manifest: dict):
+    """Yield global indices and parameters for this runner's assigned range."""
+    grid = manifest["parameter_grid"]
+    frequencies = grid["drive_frequency_hz_values"]
+    total = len(grid["alpha_values"]) * len(frequencies)
+    assignment = manifest.get("work_partition", {"start": 0, "stop": total})
+    start, stop = assignment["start"], assignment["stop"]
+    if not (0 <= start < stop <= total):
+        raise ValueError("Invalid or empty grid-point assignment.")
+    for index in range(start, stop):
+        alpha_index, frequency_index = divmod(index, len(frequencies))
+        yield (index, alpha_index, frequency_index,
+               grid["alpha_values"][alpha_index], frequencies[frequency_index])
+
+
+def generate_point_inputs(
+    base_config: Path, config_path: Path, input_directory: Path,
+    grid: dict, alpha: float, frequency: float, create_initial_state,
+) -> dict[str, Path]:
+    """Generate inputs and frequency settings without writing shared project files."""
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    input_directory.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(base_config, config_path)
+    create_initial_state(
+        grid["lattice_depth_v0_er"], float(alpha), float(frequency),
+        grid["phase_radians"], grid["initial_lattice_depth_v0_er"],
+        output_directory=input_directory, config_path=config_path,
+    )
+    inputs = {name: input_directory / name
+              for name in ("lattice_gauss.h5", "vstatic.h5", "vflo.h5")}
+    for path in inputs.values():
+        if not path.is_file():
+            raise FileNotFoundError(f"Generated input was not found: {path}")
+    return inputs
 
 
 def parameter_token(value: float) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import csv
 import os
 import sys
 import tempfile
@@ -43,6 +44,7 @@ class AnalysisMetricTests(unittest.TestCase):
             write_state(output / "0000000000000020.h5", base * 3.0)
             manifest = {
                 "status": "completed",
+                "simulation_config": {"step_x": "0.25"},
                 "parameter_grid": {
                     "alpha_values": [0.0],
                     "drive_frequency_hz_values": [0.0],
@@ -81,6 +83,16 @@ class AnalysisMetricTests(unittest.TestCase):
                 ]
             )
             self.assertAlmostEqual(measured, expected)
+            with outputs["csv"].open() as stream:
+                row = next(csv.DictReader(stream))
+            instantaneous = [np.sum(((base * scale) ** 2)[2:-2] ** 2) for scale in (2, 3)]
+            self.assertAlmostEqual(float(row["metric_std"]), np.std(instantaneous, ddof=0))
+            positions = (np.arange(2, 10) - 6) * 0.25
+            weights = base[2:-2] ** 2 / np.sum(base[2:-2] ** 2)
+            center = np.sum(weights * positions)
+            variance = np.sum(weights * (positions - center) ** 2)
+            self.assertAlmostEqual(float(row["sigma_x_squared"]), variance)
+            self.assertAlmostEqual(float(row["sigma_x"]), np.sqrt(variance))
             self.assertNotEqual(outputs["image"], second_outputs["image"])
             self.assertTrue(outputs["image"].is_file())
             self.assertTrue(outputs["image"].name.startswith("Analysis_"))

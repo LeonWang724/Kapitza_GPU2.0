@@ -18,6 +18,7 @@ void print_version_json() {
         << "{\n"
         << "  \"program\": \"gpe1d_cuda\",\n"
         << "  \"compact_phase_metric_version\": 1,\n"
+        << "  \"phase_statistics_version\": 1,\n"
         << "  \"port_version\": \"" << GPE_PORT_VERSION << "\",\n"
         << "  \"git_commit\": \"" << GPE_GIT_COMMIT << "\",\n"
         << "  \"git_dirty\": " << GPE_GIT_DIRTY << ",\n"

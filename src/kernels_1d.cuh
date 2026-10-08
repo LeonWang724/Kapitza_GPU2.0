@@ -40,4 +40,7 @@ void launch_energy_terms(const double* density,
 void launch_overlap_terms(const double* initial_density,
                           const double* current_density,
                           double* terms, int points);
-
+void launch_spatial_moment_terms(const double* density, double* first,
+                                double* second, int points, double step_x);
+void launch_spatial_variance_terms(const double* density, double* terms,
+                                  int points, double step_x, double mean_x);

@@ -25,6 +25,105 @@ Then edit the physical parameter section in
 .\MAKE_PHASE_DIAGRAM_CUDA.bat
 ```
 
+## Split a scan across terminal tabs
+
+Set `NUMBER_OF_TABS` beside the physical parameters in
+`phase_diagram/simulation_core/run_phase_diagram_CUDA.py`, then use the usual
+`RUN_PHASE_DIAGRAM_CUDA.bat` command. The default is `1`, which runs in the
+current terminal. For example:
+
+```python
+NUMBER_OF_TABS = 11
+```
+
+The launcher opens that many worker tabs in a dedicated Windows Terminal window.
+If Windows Terminal (`wt.exe`) is unavailable, it opens separate console windows.
+Each worker receives a distinct group of grid points, private input files and
+configuration, and a separate results folder. The originating terminal shows
+overall progress and must stay open until the workers finish. Completed results
+are automatically combined into one dataset for the usual make command.
+
+A 100 x 100 grid has 10,000 points: `20` tabs get 500 points each; `11` tabs get
+910 points in the first tab and 909 in each of the other ten. For any remainder,
+the first few tabs receive one extra point each. Workloads differ by at most one
+point. A count larger than the grid opens only as many workers as there are
+points. Zero, negative, and noninteger counts are rejected.
+
+To preview assignments without starting CUDA, or override the saved count:
+
+```powershell
+.\RUN_PHASE_DIAGRAM_CUDA.bat --plan
+.\RUN_PHASE_DIAGRAM_CUDA.bat --tabs 20
+```
+
+Compact and full storage both support this split. Ctrl+C in the originating
+terminal stops its workers. A worker failure stops the other workers and keeps
+their existing results and the failed point's diagnostics; the dataset is not
+marked complete. Resume is still not implemented. `--headless` runs the same
+workers without opening terminal tabs.
+
+The tab launcher alone is a Python workflow update. The statistics below add
+GPU diagnostics and require a CUDA rebuild. Local checks cover real worker
+subprocesses with a stand-in solver, odd splits, result merging, failures, and
+plotting in both storage modes. Actual Windows tab opening, GPU speed, and
+thermal behavior require checking on the target laptop. The tab count controls
+concurrency; it does not automatically tune performance or enforce temperatures.
+
+## Standard deviations and spatial variance
+
+The scalar and analysis CSV files append these columns to the existing ones:
+
+| Column | Meaning |
+| --- | --- |
+| `metric_std` | Population standard deviation of the instantaneous phase metric over the selected final snapshot times |
+| `metric_variance` | Square of `metric_std` |
+| `x_mean` | Time mean of the cloud's normalized mean position |
+| `x_squared_mean` | Time mean of its normalized second position moment |
+| `sigma_x_squared` | Time mean of the per-snapshot spatial variance, σₓ² |
+| `sigma_x` | Square root of `sigma_x_squared`, the RMS cloud width over that window |
+| `x_mean_time_std` | Population standard deviation of the cloud's center over time |
+| `spatial_snapshots_averaged` | Number of sampled states with nonzero probability in the cropped region |
+
+For each selected snapshot, positions are `(index - points_x // 2) * step_x` and
+position weights are `|psi|² / sum(|psi|²)` within the same crop as the original
+phase metric. Thus spatial variance is `sum(weight * (x - mean_x)²)`. All spatial
+lengths use solver length units, and squared columns use squared length units.
+The current supplied generator uses a 23 nm length scale. The spatial RMS width
+averages variance before taking its square root; moving centers are measured
+separately by `x_mean_time_std`. The moment identity is
+`x_squared_mean = x_mean² + x_mean_time_std² + sigma_x_squared`, up to roundoff.
+
+All temporal statistics use the same final window as `metric` (normally the last
+30 saved-time indices) and the population convention `ddof=0`. One temporal
+sample gives zero temporal standard deviation. A completely absorbed state
+does not have a normalized spatial distribution: spatial averages exclude it,
+and a window with no surviving mass has blank spatial columns. Temporal spread
+describes fluctuations over the window; it is not an uncertainty estimate for
+the mean. The original unnormalized phase metric and plot remain unchanged.
+
+Rebuild and validate on the Windows CUDA machine before using the new compact
+statistics:
+
+```powershell
+.\BUILD_CUDA.bat
+.\VALIDATE_COMPACT_CUDA.bat
+.\RUN_PHASE_DIAGRAM_CUDA.bat
+.\MAKE_PHASE_DIAGRAM_CUDA.bat
+```
+
+Compact mode computes the extra moments on the GPU only at the selected sample
+times, keeps scalar results, and saves no extra wavefunction snapshots. Every
+worker's statistics survive the combined CSV export. Full mode computes the
+same columns from retained snapshots during analysis. NPZ output also includes
+one matrix per new statistic. Older compact datasets contain only a mean, so
+their unavailable new statistics are left blank. Older full datasets can be
+reanalyzed; spatial columns need their saved configuration's `step_x`.
+
+Host C++ and Python tests cover known distributions, changing norm, nonunit grid
+spacing, temporal variance, zero-mass states, and parallel export. Actual CUDA
+kernel execution remains unverified on this Mac. The compact validation command
+now compares every new statistic against NumPy analysis of identical full runs.
+
 ## Compact storage
 
 The default saves one metric per grid point in `metrics.csv`, along with a compact
@@ -66,9 +165,9 @@ not implemented.
 - Builds refresh CMake configuration to avoid stale CUDA compiler paths.
 - Short analysis filenames avoid duplicating long dataset names.
 
-Twelve local Python and host C++ tests passed while preparing this release.
+Thirty local Python and host C++ tests passed while preparing this release.
 Windows setup, NVCC compilation, and GPU execution still require verification on
-the target machine. `VALIDATE_COMPACT_CUDA.bat` compares four small full/compact
+the target machine. `VALIDATE_COMPACT_CUDA.bat` compares six small full/compact
 GPU cases against NumPy snapshot analysis and checks that compact mode produces
 no HDF5 output snapshots. Run it before starting a large grid.
 

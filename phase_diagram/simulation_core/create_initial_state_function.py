@@ -9,6 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import tables as tb
 import os
+from pathlib import Path
 from config_value import update_config_value
 
 debug_flag = False
@@ -138,7 +139,8 @@ mli = 7.01600455 * amu
     
 
 def create_init_state(
-    V0, alpha, nu_flo, phi, initial_lattice_depth_v0_er=None
+    V0, alpha, nu_flo, phi, initial_lattice_depth_v0_er=None,
+    *, output_directory=None, config_path=None,
 ):
     # Parameters
     #V0 = 10.0          # lattice depth in E_R
@@ -268,17 +270,19 @@ def create_init_state(
         
 
     psi_0 = rs**0.5 * psi_0
-    f = tb.open_file('in\\lattice_gauss.h5', 'w')
+    output_directory = Path(output_directory) if output_directory is not None else Path('in')
+    output_directory.mkdir(parents=True, exist_ok=True)
+    f = tb.open_file(str(output_directory / 'lattice_gauss.h5'), 'w')
     f.create_array('/', 'REAL', np.real(psi_0))
     f.create_array('/', 'IMAGINARY', np.imag(psi_0))
     f.close()
     
-    f = tb.open_file('in\\vstatic.h5', 'w')
+    f = tb.open_file(str(output_directory / 'vstatic.h5'), 'w')
     f.create_array('/', 'REAL', np.real(vstatic))
     f.create_array('/', 'IMAGINARY', np.imag(vstatic))
     f.close()
     
-    f = tb.open_file('in\\vflo.h5', 'w')
+    f = tb.open_file(str(output_directory / 'vflo.h5'), 'w')
     f.create_array('/', 'REAL', np.real(vflo))
     f.create_array('/', 'IMAGINARY', np.imag(vflo))
     f.close()
@@ -292,7 +296,7 @@ def create_init_state(
         print(f"ts: {ts}")
         print(f"floquet_omega: {2.0*np.pi*nu_flo*ts}")
     
-    update_config_value("gpe1d.config", "floquet_omega", 2.0*np.pi*nu_flo*ts)
+    update_config_value(str(config_path or "gpe1d.config"), "floquet_omega", 2.0*np.pi*nu_flo*ts)
     
     
 if __name__ == "__main__":

@@ -182,8 +182,10 @@ SolverResult run_solver_1d(const ConfigData& config,
         // The historical sampling index zero means AFTER the first time step.
         // Compact mode samples that same schedule without writing field files.
         if (compact && phase_metric->wants_iteration(count)) {
-            phase_metric->add(count, diagnostics.cropped_density_squared_sum(
-                                        psi.data(), config.phase_metric_cut_points_each_edge));
+            SpatialMoments spatial;
+            const double metric = diagnostics.phase_statistics(
+                psi.data(), config.phase_metric_cut_points_each_edge, spatial);
+            phase_metric->add(count, metric, spatial);
         }
         // Preserve legacy single-run/validation snapshot behavior, including
         // its historical treatment of save_psi, outside compact mode.

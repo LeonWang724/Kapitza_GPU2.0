@@ -5,6 +5,7 @@
 #include "kernels_1d.cuh"
 
 #include <stdexcept>
+#include <cmath>
 
 Diagnostics1D::Diagnostics1D(int points, double step_x, double beta)
     : points_(points),
@@ -74,4 +75,27 @@ double Diagnostics1D::cropped_density_squared_sum(const cuDoubleComplex* psi,
     launch_overlap_terms(density_.data(), density_.data(), terms_a_.data(), points_);
     // Match the existing NumPy metric: no dx and no renormalization.
     return reducer_.sum(terms_a_.data() + cut, points_ - 2 * cut);
+}
+
+double Diagnostics1D::phase_statistics(const cuDoubleComplex* psi, int cut,
+                                       SpatialMoments& spatial) {
+    const double metric = cropped_density_squared_sum(psi, cut);
+    const int count = points_ - 2 * cut;
+    spatial = {};
+    spatial.mass = reducer_.sum(density_.data() + cut, count);
+    if (!std::isfinite(spatial.mass) || spatial.mass < 0.0) {
+        throw std::runtime_error("Cropped wavefunction mass is invalid.");
+    }
+    // A completely absorbed state still has a valid zero phase metric, but no
+    // normalized spatial distribution. Its spatial measurements stay null.
+    if (spatial.mass == 0.0) return metric;
+    launch_spatial_moment_terms(density_.data(), terms_a_.data(), terms_b_.data(),
+                               points_, step_x_);
+    spatial.mean_x = reducer_.sum(terms_a_.data() + cut, count) / spatial.mass;
+    spatial.mean_x_squared = reducer_.sum(terms_b_.data() + cut, count) / spatial.mass;
+    // A centered second pass is stable even for a narrow cloud far from x=0.
+    launch_spatial_variance_terms(density_.data(), terms_a_.data(), points_,
+                                 step_x_, spatial.mean_x);
+    spatial.variance_x = reducer_.sum(terms_a_.data() + cut, count) / spatial.mass;
+    return metric;
 }

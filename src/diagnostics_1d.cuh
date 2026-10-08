@@ -3,6 +3,7 @@
 
 #include "device_buffer.cuh"
 #include "reductions.cuh"
+#include "phase_statistics.h"
 
 #include <cuComplex.h>
 #include <cufft.h>
@@ -27,6 +28,7 @@ public:
     void capture_initial_density(const cuDoubleComplex* psi);
     double initial_density_overlap(const cuDoubleComplex* psi);
     double cropped_density_squared_sum(const cuDoubleComplex* psi, int cut);
+    double phase_statistics(const cuDoubleComplex* psi, int cut, SpatialMoments& spatial);
 
 private:
     int points_;
