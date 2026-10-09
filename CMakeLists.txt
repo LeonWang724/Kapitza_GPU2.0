@@ -1,7 +1,7 @@
 # Codex CUDA Port: native CUDA build for the gpe1d_2 1D solver.
 cmake_minimum_required(VERSION 3.27)
 
-project(gpe1d_cuda VERSION 3.0.0 LANGUAGES C CXX CUDA)
+project(gpe1d_cuda VERSION 4.0.0 LANGUAGES C CXX CUDA)
 
 option(GPE_CUDA_STRICT_FP "Disable fused multiply-add for closer CPU traceability" ON)
 option(GPE_BUILD_CPU_REFERENCE "Build the untouched MKL CPU source as an optional reference" OFF)

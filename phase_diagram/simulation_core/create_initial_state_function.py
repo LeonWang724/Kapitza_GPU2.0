@@ -8,6 +8,7 @@ Created on Fri Apr 17 12:19:23 2026
 import numpy as np
 import matplotlib.pyplot as plt
 import tables as tb
+import math
 import os
 from pathlib import Path
 from config_value import update_config_value
@@ -134,27 +135,82 @@ amu  = 1.66053906660e-27
 kB   = 1.380649e-23
 mli = 7.01600455 * amu
 
+# Simulation grid and absorber, shared with check_green_walls().
+GRID_POINTS = 65536
+GRID_SPACING_M = 23.0E-09      # scaling length rs; x = (index - n/2) * rs
+ABSORBER_FRACTION = 0.15       # absorbing layer on each side, fraction of length
+ENVELOPE_SIGMA_M = 30E-06      # initial Gaussian envelope; |psi|^2 has this sigma
+
+
+def green_wall_potential(x, Er, absorber_length, height_er, sigma_um, gap_um):
+    """Two repulsive Gaussian ("green") walls around the initial wavefunction.
+
+    Each wall is height * exp(-(x - c)^2 / (2 sigma^2)) with centres
+    c = -gap/2 and +gap/2; the initial cloud is centred at x = 0, so the gap
+    is the centre-to-centre distance between the walls. The height is in
+    recoil energies E_R, the same unit as the lattice depth V0. Returns the
+    potential in joules on the position grid x (metres). Walls must stay
+    clear of the absorbing layers (centre + 3 sigma).
+    """
+    values = {"height_er": height_er, "sigma_um": sigma_um, "gap_um": gap_um}
+    for name, value in values.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float, np.number)):
+            raise ValueError(f"Green wall {name} must be a number, not {value!r}.")
+        if not np.isfinite(value) or value <= 0:
+            raise ValueError(f"Green wall {name} must be positive and finite, not {value!r}.")
+    sigma = float(sigma_um) * 1E-06
+    centre = 0.5 * float(gap_um) * 1E-06
+    reach = centre + 3.0 * sigma
+    limit = min(x[-1] - absorber_length, -(x[0] + absorber_length))
+    if reach > limit:
+        raise ValueError(
+            f"Green walls reach |x| = {reach * 1E06:.1f} um (gap/2 + 3 sigma), inside the "
+            f"absorbing layer that starts at |x| = {limit * 1E06:.1f} um. Reduce the gap "
+            "or sigma.")
+    height = float(height_er) * Er
+    return height * (np.exp(-(x + centre)**2 / (2.0 * sigma**2))
+                     + np.exp(-(x - centre)**2 / (2.0 * sigma**2)))
+
+
+def check_green_walls(height_er, sigma_um, gap_um):
+    """Validate wall settings on the simulation grid before any run starts.
+
+    Returns the settings plus the approximate fraction of the initial cloud
+    that starts between the wall centres.
+    """
+    x = np.arange(-GRID_POINTS//2, GRID_POINTS//2) * GRID_SPACING_M
+    kL = 2.0*np.pi / 1064E-09
+    Er = hbar**2 * kL**2 / (2*mli)
+    green_wall_potential(x, Er, ABSORBER_FRACTION*(x[-1]-x[0]), height_er, sigma_um, gap_um)
+    half_gap = 0.5 * float(gap_um) * 1E-06
+    return {
+        "height_er": float(height_er), "sigma_um": float(sigma_um), "gap_um": float(gap_um),
+        "initial_fraction_between_walls": math.erf(half_gap / (np.sqrt(2.0) * ENVELOPE_SIGMA_M)),
+    }
+
     
     
     
 
 def create_init_state(
     V0, alpha, nu_flo, phi, initial_lattice_depth_v0_er=None,
-    *, output_directory=None, config_path=None,
+    *, output_directory=None, config_path=None, green_walls=None,
 ):
+    # green_walls: None (no walls) or {"height_er", "sigma_um", "gap_um"};
+    # see green_wall_potential(). The walls are static, not modulated.
     # Parameters
     #V0 = 10.0          # lattice depth in E_R
     q = 0.0           # quasimomentum in units of k_L, should lie in [-1, 1)
     band_index = 0    # 0 = lowest band
     n_pw = 40         # plane waves on each side
-    n_x = 65536
+    n_x = GRID_POINTS
     #n_cells = 3079
     
     lam = 1064E-09
     kL = 2.0*np.pi / lam
     
     #Parameters gaussian envelope
-    sigma = 30E-06
+    sigma = ENVELOPE_SIGMA_M
     p0 = 0.0 * kL
     t0 = 0    #Sets momentum spread
     
@@ -166,7 +222,7 @@ def create_init_state(
     #nu_flo = 2.0E06
     
     #Scaling parameter
-    rs = 23.0E-09
+    rs = GRID_SPACING_M
     x = np.arange(-n_x//2, n_x//2) * rs
     #n_cells = int(rs * n_x / 532E-09)
     #print(n_cells)
@@ -197,7 +253,7 @@ def create_init_state(
     
     #print(dx)
     # absorber settings
-    Labs = 0.15*(x[-1]-x[0])   # 15% on each side
+    Labs = ABSORBER_FRACTION*(x[-1]-x[0])   # 15% on each side
     mexp = 4
     W0   = 5*Er  # tune (units of energy)
     
@@ -231,6 +287,12 @@ def create_init_state(
     
     #vstatic =  -1.0 * V0 * np.cos(2.0 * kL * x + phi)
     #vflo = -1.0 * V0 * alpha * np.cos(2.0 * kL * x + phi)
+
+    # Optional green walls join the static potential only.
+    if green_walls is not None:
+        vstatic = vstatic + green_wall_potential(
+            x, Er, Labs, green_walls["height_er"], green_walls["sigma_um"],
+            green_walls["gap_um"])
     
     
     #Add absorbative walls.

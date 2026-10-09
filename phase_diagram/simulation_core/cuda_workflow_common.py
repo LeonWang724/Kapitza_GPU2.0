@@ -39,10 +39,13 @@ def generate_point_inputs(
     config_path.parent.mkdir(parents=True, exist_ok=True)
     input_directory.mkdir(parents=True, exist_ok=True)
     shutil.copy2(base_config, config_path)
+    # Older manifests have no green walls; generators then see no new keyword.
+    walls = grid.get("green_walls")
     create_initial_state(
         grid["lattice_depth_v0_er"], float(alpha), float(frequency),
         grid["phase_radians"], grid["initial_lattice_depth_v0_er"],
         output_directory=input_directory, config_path=config_path,
+        **({"green_walls": walls} if walls else {}),
     )
     inputs = {name: input_directory / name
               for name in ("lattice_gauss.h5", "vstatic.h5", "vflo.h5")}
@@ -61,13 +64,21 @@ def phase_dataset_label(
     lattice_depth_v0_er: float,
     initial_lattice_depth_v0_er: float,
     phase_radians: float,
+    green_walls: dict | None = None,
 ) -> str:
     """Build the shared descriptive label used by datasets and analysis files."""
-    return (
+    label = (
         f"LatticeDepth_{parameter_token(lattice_depth_v0_er)}ER_"
         f"InitialDepth_{parameter_token(initial_lattice_depth_v0_er)}ER_"
         f"Phase_{parameter_token(phase_radians)}rad"
     )
+    if green_walls:
+        label += (
+            f"_Walls_H{parameter_token(green_walls['height_er'])}ER_"
+            f"S{parameter_token(green_walls['sigma_um'])}um_"
+            f"G{parameter_token(green_walls['gap_um'])}um"
+        )
+    return label
 
 
 def utc_now() -> str:

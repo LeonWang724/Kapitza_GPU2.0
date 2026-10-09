@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from create_initial_state_function import create_init_state
+from create_initial_state_function import check_green_walls, create_init_state
 from compact_sweep import run_compact_sweep
 from full_sweep import run_full_sweep
 from parallel_sweep import print_assignments, run_parallel_sweep, split_point_ranges
@@ -38,6 +38,15 @@ LATTICE_DEPTH_V0_ER = 20.0
 INITIAL_LATTICE_DEPTH_V0_ER = 40.0
 PHASE_RADIANS = 0.0
 
+# Green walls: two repulsive Gaussian walls around the initial wavefunction,
+# added to the static potential (the drive does not modulate them). They are
+# centred at -gap/2 and +gap/2 around the cloud at x = 0. False leaves every
+# input exactly as before.
+GreenWalls = False
+GreenWallHeight_ER = 100.0   # peak height of each wall, in E_R like the lattice depth
+GreenWallSigma_um = 5.0      # Gaussian sigma of each wall, exp(-x^2/(2 sigma^2)), in um
+GreenWallGap_um = 200.0      # centre-to-centre distance between the two walls, in um
+
 # Number of simultaneous terminal tabs sharing this grid. Any positive integer
 # works; leftover points are distributed one each to the first tabs.
 # 1 runs here. Values greater than 1 open Windows Terminal tabs (or windows).
@@ -54,10 +63,21 @@ CUDA_DEVICE = 0
 POINTS_PER_BATCH = 8
 
 
-def unique_results_directory() -> Path:
+def green_wall_settings() -> tuple[dict | None, float | None]:
+    """Validated wall settings and the initial cloud fraction between them."""
+    if not isinstance(GreenWalls, bool):
+        raise ValueError("GreenWalls must be True or False.")
+    if not GreenWalls:
+        return None, None
+    checked = check_green_walls(GreenWallHeight_ER, GreenWallSigma_um, GreenWallGap_um)
+    fraction = checked.pop("initial_fraction_between_walls")
+    return checked, fraction
+
+
+def unique_results_directory(green_walls: dict | None) -> Path:
     timestamp = datetime.now(timezone.utc).strftime("cuda_%Y%m%dT%H%M%SZ")
     parameter_label = phase_dataset_label(
-        LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER, PHASE_RADIANS
+        LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER, PHASE_RADIANS, green_walls
     )
     path = RESULTS_DIRECTORY / f"{parameter_label}_{timestamp}"
     if path.exists():
@@ -95,6 +115,10 @@ def main() -> int:
         parser.error("NUMBER_OF_TABS / --tabs must be a positive integer.")
     if isinstance(arguments.batch, bool) or not isinstance(arguments.batch, int) or arguments.batch <= 0:
         parser.error("POINTS_PER_BATCH / --batch must be a positive integer.")
+    try:
+        green_walls, fraction_between = green_wall_settings()
+    except ValueError as error:
+        parser.error(str(error))
     # Snapshot output and the reference loop keep one point per solver run.
     batch = 1 if arguments.storage == "full" or arguments.reference_loop else arguments.batch
     total = len(ALPHA_VALUES) * len(DRIVE_FREQUENCY_HZ_VALUES)
@@ -102,6 +126,14 @@ def main() -> int:
     print_assignments(total, arguments.tabs, assignments)
     if batch > 1:
         print(f"Each tab simulates up to {batch} grid points at a time as one GPU batch.")
+    if green_walls:
+        print(f"Green walls: {green_walls['height_er']:g} E_R high, sigma "
+              f"{green_walls['sigma_um']:g} um, centres at +/-{green_walls['gap_um'] / 2:g} um; "
+              f"{fraction_between:.1%} of the initial cloud starts between them.")
+        if fraction_between < 0.95:
+            print("Note: the walls overlap the initial cloud.")
+    else:
+        print("Green walls: off")
     if arguments.plan:
         return 0
 
@@ -132,7 +164,8 @@ def main() -> int:
     # and thermal headroom to the GPU, especially with several tabs.
     extra_arguments = (["--wait", "blocking"] if fused else []) + (
         ["--reference-loop"] if arguments.reference_loop else [])
-    results_root = arguments.results.resolve() if arguments.results else unique_results_directory()
+    results_root = (arguments.results.resolve() if arguments.results
+                    else unique_results_directory(green_walls))
     if results_root.exists() and any(results_root.iterdir()):
         raise FileExistsError(f"Results directory must be absent or empty: {results_root}")
     results_root.mkdir(parents=True, exist_ok=True)
@@ -143,7 +176,7 @@ def main() -> int:
 
     manifest_path = results_root / "run_manifest.json"
     parameter_label = phase_dataset_label(
-        LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER, PHASE_RADIANS
+        LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER, PHASE_RADIANS, green_walls
     )
     manifest = {
         "_codex_cuda_port": "Native CUDA phase-diagram run manifest.",
@@ -176,6 +209,8 @@ def main() -> int:
             "lattice_depth_v0_er": LATTICE_DEPTH_V0_ER,
             "initial_lattice_depth_v0_er": INITIAL_LATTICE_DEPTH_V0_ER,
             "phase_radians": PHASE_RADIANS,
+            # None, or the walls' height (E_R), sigma (um) and centre gap (um).
+            "green_walls": green_walls,
         },
         "analysis_contract": {
             "statistics_version": 1,

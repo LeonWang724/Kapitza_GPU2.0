@@ -46,6 +46,16 @@ The executable bundled with the source and the executable used by the phase-diag
   nonlinearities. `tests/cuda_host_stubs` lets clang type-check the CUDA
   sources without the toolkit; neither replaces the Windows GPU validation.
 
+## Green walls (version 4.0)
+
+- `GreenWalls = True` adds `H [exp(-(x+g/2)^2/(2 s^2)) + exp(-(x-g/2)^2/(2 s^2))]`
+  to the real static potential before the absorber and the `E_s` scaling, with
+  `H` in recoil energies (the unit of `V0`), `s` and the centre-to-centre gap
+  `g` in micrometres. The Floquet array, initial state and absorber are
+  unchanged, and the solver needs no changes.
+- With the walls off, `create_init_state` runs exactly the previous arithmetic;
+  the generated arrays are bitwise identical to 3.0.
+
 ## Phase-diagram quantity
 
 The latest historical scripts select the final 30 HDF5 snapshots, cut 100 points from both spatial edges, and ultimately overwrite a standard-deviation calculation with `sum(probability**2)`. The actual plotted value is therefore the mean unnormalized discrete `sum |psi|^4`, not standard deviation and not a continuum-normalized IPR. The new plotter preserves the alpha-outer/frequency-inner ordering, inverted frequency axis, inferno colormap, cut, and averaging. At the workflow owner's request, the displayed colorbar retains the historical `Standard Deviation of |psi|^2` wording; the manifest and this audit note retain the exact numerical definition. Files are numerically sorted instead of relying on unspecified `glob` order.

@@ -1,12 +1,34 @@
-# Kapitza_GPU3.0
+# Kapitza_GPU4.0
 
-Version 3.0 adds cold-atom **Klein tunneling in an engineered bichromatic optical
+Version 4.0 adds optional **green walls** to the phase diagram: two repulsive
+Gaussian potential walls around the initial wavefunction. Set them in the
+physical parameter section of
+`phase_diagram/simulation_core/run_phase_diagram_CUDA.py`:
+
+```python
+GreenWalls = True            # False: no walls, inputs identical to before
+GreenWallHeight_ER = 100.0   # peak height of each wall, in E_R like the lattice depth
+GreenWallSigma_um = 5.0      # Gaussian sigma of each wall, exp(-x^2/(2 sigma^2)), in um
+GreenWallGap_um = 200.0      # centre-to-centre distance between the two walls, in um
+```
+
+The walls are centred at `-gap/2` and `+gap/2`, around the initial cloud at
+`x = 0`, and join the static potential only; the drive modulates the lattice,
+not the walls. Each wall must end (`gap/2 + 3 sigma`) before the absorbing
+layer, which starts about 527.5 um from the centre. The runner checks this before
+any GPU work and prints how much of the initial cloud (sigma 30 um) starts
+between the walls. Dataset folders, manifests and plot titles record the
+walls; `RUN_PHASE_DIAGRAM_CUDA.bat --plan` shows them without running.
+With `GreenWalls = False` every generated input is bitwise identical to 3.0.
+The example values above are placeholders; set them to your experiment's.
+
+Version 3.0 added cold-atom **Klein tunneling in an engineered bichromatic optical
 lattice**. It prepares a moving packet in the upper excited Bloch band, evolves
 it through a smooth barrier with the existing complex128 CUDA solver, and
 exports transmission, reflection, loss, spatial variance and scattering plots.
 See [README_KLEIN.md](README_KLEIN.md) for the model, settings and validation.
 
-From the `Kapitza_GPU3.0` folder on Windows:
+From the `Kapitza_GPU4.0` folder on Windows:
 
 ```powershell
 .\SETUP_WINDOWS.bat
@@ -17,8 +39,8 @@ From the `Kapitza_GPU3.0` folder on Windows:
 
 The existing Kapitza phase-diagram workflow, tab splitting, statistics and
 fused/batched CUDA solver remain available below. This folder was copied from
-2.0 before adding the Klein workflow. Its inherited Git remote still names the
-2.0 repository; a separate 3.0 repository has not been published.
+3.0 (itself copied from 2.0). Its Git remote still names the 2.0 repository,
+where 4.0 lives on the `feature/green-walls` branch.
 
 Native CUDA simulation of a one-dimensional driven optical lattice, with compact
 phase-diagram output. This version builds on

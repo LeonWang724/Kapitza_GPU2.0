@@ -47,7 +47,7 @@ def grid_parameter_label(grid: dict) -> str:
         grid.get("initial_lattice_depth_v0_er", 2.0 * lattice_depth)
     )
     phase = float(grid.get("phase_radians", 0.0))
-    return phase_dataset_label(lattice_depth, initial_depth, phase)
+    return phase_dataset_label(lattice_depth, initial_depth, phase, grid.get("green_walls"))
 
 
 def automatic_plot_title(grid: dict) -> str:
@@ -56,10 +56,15 @@ def automatic_plot_title(grid: dict) -> str:
         grid.get("initial_lattice_depth_v0_er", 2.0 * lattice_depth)
     )
     phase = float(grid.get("phase_radians", 0.0))
-    return (
+    title = (
         f"Lattice Depth {lattice_depth:g} E_R * "
         f"Initial Depth {initial_depth:g} E_R * Phase {phase:g} rad"
     )
+    walls = grid.get("green_walls")
+    if walls:
+        title += (f"\nGreen walls {walls['height_er']:g} E_R, sigma {walls['sigma_um']:g} um, "
+                  f"gap {walls['gap_um']:g} um")
+    return title
 
 
 def resolve_manifest(dataset: str | Path | None = None) -> Path:
