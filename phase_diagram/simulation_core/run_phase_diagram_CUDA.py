@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from create_initial_state_function import check_green_walls, create_init_state
+from level_statistics import validate_settings as level_statistics_settings
 from compact_sweep import run_compact_sweep
 from full_sweep import run_full_sweep
 from parallel_sweep import print_assignments, run_parallel_sweep, split_point_ranges
@@ -46,6 +47,15 @@ GreenWalls = False
 GreenWallHeight_ER = 100.0   # peak height of each wall, in E_R like the lattice depth
 GreenWallSigma_um = 5.0      # Gaussian sigma of each wall, exp(-x^2/(2 sigma^2)), in um
 GreenWallGap_um = 200.0      # centre-to-centre distance between the two walls, in um
+
+# Level statistics (level_statistics.py): <r>, <r^2> and the Wigner-Dyson
+# versus Poisson factors eta = |(<r> - <r>_P) / (<r>_GOE - <r>_P)| and
+# eta_r_squared (same with <r^2>) of the Floquet quasienergies of the driven
+# lattice at each point, added as columns of metrics.csv. The CPU computes them
+# while the GPU runs; they do not use the GPU result or the green walls.
+CalculateLevelStatistics = False
+LevelStatisticsQuasimomentum = 0.0     # q in units of kL; 0 is the BEC's (parity sectors split)
+LevelStatisticsPlaneWaveCutoff = 40    # plane waves |n| <= n_max, i.e. 2 n_max + 1 levels
 
 # Number of simultaneous terminal tabs sharing this grid. Any positive integer
 # works; leftover points are distributed one each to the first tabs.
@@ -117,6 +127,11 @@ def main() -> int:
         parser.error("POINTS_PER_BATCH / --batch must be a positive integer.")
     try:
         green_walls, fraction_between = green_wall_settings()
+        if not isinstance(CalculateLevelStatistics, bool):
+            raise ValueError("CalculateLevelStatistics must be True or False.")
+        level_statistics = (level_statistics_settings(LevelStatisticsQuasimomentum,
+                                                      LevelStatisticsPlaneWaveCutoff)
+                            if CalculateLevelStatistics else None)
     except ValueError as error:
         parser.error(str(error))
     # Snapshot output and the reference loop keep one point per solver run.
@@ -134,6 +149,12 @@ def main() -> int:
             print("Note: the walls overlap the initial cloud.")
     else:
         print("Green walls: off")
+    if level_statistics:
+        print(f"Level statistics: <r>, <r^2>, eta and eta_r_squared of the Floquet quasienergies "
+              f"at q = {level_statistics['quasimomentum']:g} kL with plane waves "
+              f"|n| <= {level_statistics['plane_wave_cutoff']}.")
+    else:
+        print("Level statistics: off")
     if arguments.plan:
         return 0
 
@@ -223,6 +244,8 @@ def main() -> int:
             "final_snapshot_count": 30,
             "cut_points_each_edge": 100,
             "metric": "mean_discrete_sum_abs_psi_fourth_power",
+            # None, or the Floquet level-statistics settings and references.
+            "level_statistics": level_statistics,
             "normalization": "none",
             "frequency_axis_inverted": True,
             "colormap": "inferno",

@@ -43,5 +43,6 @@ update_backups/
 !/phase_diagram/simulation_core/requirements_CUDA.txt
 !/phase_diagram/simulation_core/compact_sweep.py
 !/phase_diagram/simulation_core/phase_metric.py
+!/phase_diagram/simulation_core/level_statistics.py
 !/phase_diagram/simulation_core/full_sweep.py
 !/phase_diagram/simulation_core/parallel_sweep.py

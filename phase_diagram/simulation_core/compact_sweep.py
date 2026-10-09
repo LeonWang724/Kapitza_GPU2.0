@@ -11,6 +11,8 @@ import json
 import os
 import shutil
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Callable
 
@@ -18,7 +20,8 @@ from cuda_workflow_common import (
     SCRIPT_DIRECTORY, generate_point_inputs, grid_points, read_config, run_logged, sha256_file,
     update_config, utc_now, write_json_atomic,
 )
-from phase_metric import CSV_FIELDS, csv_row, expected_sampling, validate_summary
+from level_statistics import level_statistics_task
+from phase_metric import csv_fields, csv_row, expected_sampling, validate_summary
 
 
 def batched(points, size: int):
@@ -45,6 +48,7 @@ def run_compact_sweep(
     solver = manifest.get("solver", {})
     batch_size = int(solver.get("points_per_batch", 1))
     extra_arguments = [str(argument) for argument in solver.get("extra_arguments", [])]
+    level_settings = contract.get("level_statistics")
     manifest["simulation_config"] = read_config(base_config)
     expected_sampling(manifest["simulation_config"], contract)
     provenance = results_root / "provenance"
@@ -64,12 +68,17 @@ def run_compact_sweep(
         (results_root / "metrics.csv").open("w", encoding="utf-8", newline="") as table,
         (results_root / "point_results.jsonl").open("w", encoding="utf-8") as journal,
     ):
-        writer = csv.DictWriter(table, fieldnames=CSV_FIELDS)
+        writer = csv.DictWriter(table, fieldnames=csv_fields(contract))
         writer.writeheader()
         table.flush()
         # Reuse one small scratch directory for the entire sweep. It holds only
         # the current batch's inputs/logs/status/configs and scalar outputs.
-        with tempfile.TemporaryDirectory(prefix=".work_", dir=results_root) as temporary:
+        # Level statistics need only each point's parameters, so one background
+        # thread computes them on the CPU while the GPU runs the batch.
+        with (
+            tempfile.TemporaryDirectory(prefix=".work_", dir=results_root) as temporary,
+            ThreadPoolExecutor(max_workers=1) if level_settings else nullcontext() as levels,
+        ):
             work = Path(temporary)
             for batch in batched(grid_points(manifest), batch_size):
                 # Delete only this runner's previous scratch artifacts.
@@ -80,6 +89,9 @@ def run_compact_sweep(
                         path.unlink()
                 records, points = [], []
                 failing_index = batch[0][0]
+                pending = [levels.submit(level_statistics_task,
+                                         (grid["lattice_depth_v0_er"], alpha, frequency, level_settings))
+                           for _, _, _, alpha, frequency in batch] if levels else []
                 try:
                     for position, (index, alpha_index, frequency_index, alpha, frequency) in enumerate(batch):
                         failing_index = index
@@ -141,6 +153,9 @@ def run_compact_sweep(
                         value, _ = validate_summary(summary, generated, contract)
                         record["metric_summary"] = summary
                         values.append(value)
+                    for record, future in zip(records, pending):
+                        failing_index = record["run_index"]
+                        record["level_statistics"] = future.result()
                     for record, (_, _, generated) in zip(records, points):
                         record["status"] = "completed"
                         record["finished_utc"] = utc_now()
@@ -174,4 +189,6 @@ def run_compact_sweep(
                     if len(batch) > 1:
                         manifest["failed_batch_run_indices"] = [point[0] for point in batch]
                     write_json_atomic(manifest_path, manifest)
+                    for future in pending:
+                        future.cancel()
                     raise

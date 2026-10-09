@@ -22,6 +22,44 @@ walls; `RUN_PHASE_DIAGRAM_CUDA.bat --plan` shows them without running.
 With `GreenWalls = False` every generated input is bitwise identical to 3.0.
 The example values above are placeholders; set them to your experiment's.
 
+### Level statistics: `<r>`, `<r^2>` and eta
+
+`CalculateLevelStatistics = True` in the same section adds five columns to
+`metrics.csv` (and to the MAKE analysis CSV and NPZ), following
+*A Scalar Factor for Comparing WD and Poissonian Statistics*:
+
+| Column | Meaning |
+| --- | --- |
+| `mean_r` | `<r>`, mean restricted spacing ratio `r_n = min(d_{n-1}, d_n) / max(d_{n-1}, d_n)` |
+| `mean_r_squared` | `<r^2>` |
+| `eta` | `abs((<r> - <r>_P) / (<r>_GOE - <r>_P))`: 0 Poisson-like, 1 GOE-like |
+| `eta_r_squared` | the same with `<r^2>` |
+| `level_ratio_count` | number of ratios averaged |
+
+The levels are the Floquet quasienergies of the driven lattice
+`V0 [1 + alpha cos(omega t)] cos^2(kL x)` at quasimomentum
+`LevelStatisticsQuasimomentum` (default 0, the BEC's), from the one-period
+evolution operator in a plane-wave basis `|n| <= LevelStatisticsPlaneWaveCutoff`
+(default 40). At q = 0 the even and odd parity sectors are treated separately
+and their ratios pooled; spacings wrap around the quasienergy circle. The
+references are `<r>_P = 2 ln 2 - 1`, `<r^2>_P = 3 - 4 ln 2`, `<r>_GOE = 0.5307`
+and `<r^2>_GOE = 0.3462`; the last was computed with 4000 GOE matrices of size
+1000. This is a bulk-lattice calculation: it ignores the green walls and does
+not use the GPU result, and the CPU computes it while the GPU runs (about 0.03
+to 0.2 s per point). The result depends on the cutoff, because high-momentum
+plane waves are regular; compare cutoffs before interpreting small differences.
+
+Everything is in `phase_diagram/simulation_core/level_statistics.py`. To check
+it, double-click `VERIFY_LEVEL_STATISTICS.bat`. The checks cover the ratio
+definition, Poisson and random-matrix levels, the undriven lattice, a
+comparison with the lab's Sambe-space Floquet Hamiltonian and the integrator's
+order. Single points and the GOE references can be recomputed from a terminal:
+
+```powershell
+.\.venv\Scripts\python.exe phase_diagram\simulation_core\level_statistics.py --point 20 60 3.5e6
+.\.venv\Scripts\python.exe phase_diagram\simulation_core\level_statistics.py --goe 1000 200
+```
+
 Version 3.0 added cold-atom **Klein tunneling in an engineered bichromatic optical
 lattice**. It prepares a moving packet in the upper excited Bloch band, evolves
 it through a smooth barrier with the existing complex128 CUDA solver, and

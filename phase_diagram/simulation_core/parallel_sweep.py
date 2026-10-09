@@ -117,7 +117,7 @@ def stop_workers(root: Path, launched: list[tuple[Path, subprocess.Popen]]) -> N
 
 def merge_workers(root: Path, manifest: dict) -> None:
     """Validate exact coverage before publishing a completed parent dataset."""
-    from phase_metric import CSV_FIELDS, csv_row, validate_summary
+    from phase_metric import csv_fields, csv_row, validate_summary
 
     grid = manifest["parameter_grid"]
     frequencies = grid["drive_frequency_hz_values"]
@@ -173,7 +173,7 @@ def merge_workers(root: Path, manifest: dict) -> None:
         journal = root / "point_results.jsonl.tmp"
         table = root / "metrics.csv.tmp"
         with journal.open("w", encoding="utf-8") as stream, table.open("w", encoding="utf-8", newline="") as csv_stream:
-            writer = csv.DictWriter(csv_stream, fieldnames=CSV_FIELDS)
+            writer = csv.DictWriter(csv_stream, fieldnames=csv_fields(manifest["analysis_contract"]))
             writer.writeheader()
             for record in records:
                 stream.write(json.dumps(record, allow_nan=False) + "\n")

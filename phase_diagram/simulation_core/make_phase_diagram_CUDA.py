@@ -14,7 +14,10 @@ import numpy as np
 import tables as tb
 
 from cuda_workflow_common import RESULTS_DIRECTORY, phase_dataset_label, read_config
-from phase_metric import CSV_FIELDS, STATISTICS_FIELDS, csv_row, statistics_from_probabilities
+from phase_metric import (
+    LEVEL_STATISTICS_FIELDS, STATISTICS_FIELDS, csv_fields, csv_row, level_statistics_columns,
+    statistics_from_probabilities,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +121,9 @@ def analyze(
     alpha_values = np.asarray(grid["alpha_values"], dtype=np.float64)
     frequency_values = np.asarray(grid["drive_frequency_hz_values"], dtype=np.float64)
     metric = np.full((frequency_values.size, alpha_values.size), np.nan)
-    statistics_matrices = {key: np.full_like(metric, np.nan) for key in STATISTICS_FIELDS}
+    levels = bool(contract.get("level_statistics"))
+    matrix_fields = STATISTICS_FIELDS + (LEVEL_STATISTICS_FIELDS if levels else ())
+    statistics_matrices = {key: np.full_like(metric, np.nan) for key in matrix_fields}
 
     final_count = int(contract["final_snapshot_count"])
     cut = int(contract["cut_points_each_edge"])
@@ -161,6 +166,8 @@ def analyze(
             mean_metric = statistics["metric"]
             row = {"run_index": run["run_index"], "alpha": run["alpha"],
                    "drive_frequency_hz": run["drive_frequency_hz"], **statistics}
+            if levels:
+                row.update(level_statistics_columns(run))
         alpha_index = int(run["alpha_index"])
         frequency_index = int(run["frequency_index"])
         if not (0 <= alpha_index < alpha_values.size and 0 <= frequency_index < frequency_values.size):
@@ -172,7 +179,7 @@ def analyze(
             raise ValueError("Grid point parameters do not match the manifest.")
         seen.add(coordinate)
         metric[frequency_index, alpha_index] = mean_metric
-        for key in STATISTICS_FIELDS:
+        for key in matrix_fields:
             if row[key] is not None:
                 statistics_matrices[key][frequency_index, alpha_index] = row[key]
         rows.append(row)
@@ -202,7 +209,7 @@ def analyze(
         **{f"{key}_matrix": value for key, value in statistics_matrices.items()},
     )
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=csv_fields(contract))
         writer.writeheader()
         writer.writerows(rows)
 

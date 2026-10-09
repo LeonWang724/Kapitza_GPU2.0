@@ -8,6 +8,7 @@ from cuda_workflow_common import (
     generate_point_inputs, grid_points, read_config, run_logged, sha256_file,
     update_config, utc_now, write_json_atomic,
 )
+from level_statistics import level_statistics_task
 
 
 def relative(path: Path, root: Path) -> str:
@@ -25,6 +26,7 @@ def run_full_sweep(
     manifest["simulation_config"] = read_config(base_config)
     extra_arguments = [str(argument) for argument in
                        manifest.get("solver", {}).get("extra_arguments", [])]
+    level_settings = manifest["analysis_contract"].get("level_statistics")
     for index, alpha_index, frequency_index, alpha, frequency in grid_points(manifest):
         output = results_root / f"out_{index:03d}"
         inputs_directory = results_root / "inputs" / f"run_{index:03d}"
@@ -64,6 +66,9 @@ def run_full_sweep(
             })
             record["floquet_omega_dimensionless"] = float(read_config(config)["floquet_omega"])
             record["config_sha256"] = sha256_file(config)
+            if level_settings:
+                record["level_statistics"] = level_statistics_task(
+                    (grid["lattice_depth_v0_er"], alpha, frequency, level_settings))
             record["inputs"] = {
                 name: {"path": relative(path, results_root), "sha256": sha256_file(path)}
                 for name, path in inputs.items()

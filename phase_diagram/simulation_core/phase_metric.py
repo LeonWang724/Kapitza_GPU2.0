@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+from level_statistics import COLUMNS as LEVEL_STATISTICS_FIELDS
+
 METRIC_NAME = "mean_discrete_sum_abs_psi_fourth_power"
 STATISTICS_FIELDS = (
     "metric_std", "metric_variance", "x_mean", "x_squared_mean",
@@ -47,14 +49,37 @@ def statistics_columns(summary: dict, *, required: bool = False) -> dict:
     return values
 
 
+def csv_fields(contract: dict) -> tuple[str, ...]:
+    """CSV columns; level statistics are appended only when the run computed them."""
+    return CSV_FIELDS + (LEVEL_STATISTICS_FIELDS if contract.get("level_statistics") else ())
+
+
+def level_statistics_columns(record: dict) -> dict:
+    """Validated <r>, <r^2>, eta, eta_r2 and ratio count stored with a point."""
+    values = record.get("level_statistics")
+    if not isinstance(values, dict) or any(key not in values for key in LEVEL_STATISTICS_FIELDS):
+        raise ValueError(f"Point {record.get('run_index')} is missing its level statistics.")
+    for key in LEVEL_STATISTICS_FIELDS:
+        value = values[key]
+        if value is None and key != "level_ratio_count":
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value) or value < 0:
+            raise ValueError(f"Point {record.get('run_index')} has an invalid {key}: {value!r}.")
+    return {key: values[key] for key in LEVEL_STATISTICS_FIELDS}
+
+
 def csv_row(record: dict, summary: dict, config: dict, contract: dict) -> dict:
     value, samples = validate_summary(summary, config, contract)
-    return {
+    row = {
         "run_index": record["run_index"], "alpha": record["alpha"],
         "drive_frequency_hz": record["drive_frequency_hz"],
         "snapshots_averaged": samples, "metric": value,
         **statistics_columns(summary, required=contract.get("statistics_version", 0) == 1),
     }
+    if contract.get("level_statistics"):
+        row.update(level_statistics_columns(record))
+    return row
 
 
 def statistics_from_probabilities(probabilities, *, cut: int, step_x: float | None) -> dict:
