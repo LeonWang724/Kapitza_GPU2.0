@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tables as tb
 
+from create_initial_state_function import GRID_SPACING_M
 from cuda_workflow_common import RESULTS_DIRECTORY, phase_dataset_label, read_config
 from phase_metric import (
     LEVEL_STATISTICS_FIELDS, STATISTICS_FIELDS, csv_fields, csv_row, level_statistics_columns,
@@ -51,9 +52,10 @@ COLUMN_TITLES = {
     "alpha": r"$\alpha$",
     "drive_frequency_hz": r"$\nu_{\mathrm{flo}}$ (Hz)",
     "metric": r"IPR: mean discrete $\sum_j |\psi_j|^4$",
-    "metric_std": r"Standard deviation of $\sum_j |\psi_j|^4$",
-    "metric_variance": r"Variance of $\sum_j |\psi_j|^4$",
-    "sigma_x": r"$\sigma_x$ (solver length units)",
+    "metric_std": r"Fluctuation in time of the IPR (std over snapshots)",
+    "metric_variance": r"Fluctuation in time of the IPR (variance over snapshots)",
+    "sigma_x_um": r"Standard deviation of $|\psi|^2$: cloud width $\sigma_x$ ($\mu$m)",
+    "sigma_x": r"Standard deviation of $|\psi|^2$: $\sigma_x$ (units of 23 nm)",
     "sigma_x_squared": r"$\sigma_x^2$ (solver length units$^2$)",
     "x_mean": r"$\langle x \rangle$ (solver length units)",
     "mean_r": r"$\langle r \rangle$",
@@ -65,6 +67,23 @@ COLUMN_TITLES = {
     "green_wall_sigma_um": r"Green wall $\sigma$ ($\mu$m)",
     "green_wall_gap_um": r"Green wall gap ($\mu$m)",
 }
+# The lab's standard deviation of |psi|^2 is the cloud width sigma_x; the CSV
+# stores it in solver length units, which are the generator's 23 nm grid spacing.
+DERIVED_COLUMNS = ("sigma_x_um",)
+# Short descriptions shown when MAKE lists the columns.
+COLUMN_NOTES = {
+    "metric": "IPR",
+    "sigma_x_um": "standard deviation of |psi|^2, the cloud width",
+    "metric_std": "time fluctuation of the IPR",
+}
+
+
+def add_derived_columns(row: dict) -> dict:
+    if row.get("sigma_x") is not None and row.get("sigma_x_um") is None:
+        row["sigma_x_um"] = float(row["sigma_x"]) * GRID_SPACING_M * 1e6
+    return row
+
+
 # Scan-wide parameters added to every row, so that datasets can be combined
 # and plotted along them. A scan without walls has wall height 0.
 DATASET_COLUMNS = (
@@ -242,14 +261,14 @@ def dataset_analysis(manifest_path: Path) -> dict:
             if row[key] is not None:
                 statistics_matrices[key][frequency_index, alpha_index] = row[key]
         row.update(scan_columns)
-        rows.append(row)
+        rows.append(add_derived_columns(row))
         print(
             f"out_{run['run_index']:03d}: alpha={run['alpha']:.10g}, "
             f"frequency={run['drive_frequency_hz']:.10g} Hz, metric={mean_metric:.10g}"
         )
     return {
         "manifest": manifest, "root": root, "rows": rows,
-        "fields": csv_fields(contract) + DATASET_COLUMNS,
+        "fields": csv_fields(contract) + DERIVED_COLUMNS + DATASET_COLUMNS,
         "alpha_values": alpha_values, "frequency_values": frequency_values,
         "metric": metric, "matrices": statistics_matrices,
     }
@@ -270,7 +289,7 @@ def read_csv_rows(path: Path) -> list[dict]:
                     row[key] = float(text) if text else None
                 except ValueError:
                     row[key] = text
-            rows.append(row)
+            rows.append(add_derived_columns(row))
     if not rows:
         raise ValueError(f"No rows in {path}")
     return rows
@@ -369,11 +388,13 @@ def ask_plot_settings(rows: list[dict], x: str, y: str, color: str, color_limits
     """Ask in the terminal for the plotted columns, colour limits and fixed columns."""
     columns = numeric_columns(rows)
     inputs = [name for name in columns if name in PARAMETER_COLUMNS]
-    results = [name + (" (IPR)" if name == "metric" else "") for name in columns
-               if name not in PARAMETER_COLUMNS and name != "run_index"]
+    results = [name for name in columns if name not in PARAMETER_COLUMNS and name != "run_index"]
     print("\nColumns available for plotting")
     print("  inputs:  " + ", ".join(inputs))
     print("  results: " + ", ".join(results))
+    for name in results:
+        if name in COLUMN_NOTES:
+            print(f"    {name} = {COLUMN_NOTES[name]}")
 
     def choose(label: str, default: str, options: list[str]) -> str:
         while True:

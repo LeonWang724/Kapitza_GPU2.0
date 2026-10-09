@@ -69,15 +69,23 @@ colour limits):
 ```text
 Columns available for plotting
   inputs:  alpha, drive_frequency_hz, lattice_depth_v0_er, ..., green_wall_height_er, ...
-  results: metric (IPR), metric_std, sigma_x, ..., mean_r, eta, ...
+  results: metric, metric_std, ..., sigma_x, ..., sigma_x_um, mean_r, eta, ...
+    metric = IPR
+    sigma_x_um = standard deviation of |psi|^2, the cloud width
+    metric_std = time fluctuation of the IPR
 x axis [alpha]:
 y axis [drive_frequency_hz]:
-colour [metric]: metric_std
+colour [metric]: sigma_x_um
 colour limits as 'min max', or 'auto' [auto]: 0 0.8
 ```
 
-Only columns present in that dataset are offered, so older results without the
-standard-deviation columns simply do not list them. Each row also carries the
+The standard deviation of `|psi|^2` is the cloud width `sigma_x_um`: the
+spread of x weighted by `|psi|^2` in the cropped window, normalized to the
+atoms still there, as the root mean square over the final 30 snapshots, in
+micrometres (`sigma_x` in 23 nm grid units). `metric_std` is something else:
+how much the IPR fluctuates between those snapshots. Only columns present in
+that dataset are offered, so older results without these columns do not list
+them. Each row also carries the
 scan's lattice depth and green-wall height (0 without walls), sigma and gap.
 To plot along a parameter that is fixed within one scan, such as the wall
 height, pass several datasets or CSV files; when rows share a plotted point,
@@ -89,7 +97,7 @@ MAKE asks which other input to fix (for example the frequency):
 
 Combined plots are saved under `results_cuda\combined_plots` with the rows
 used and their sources. The same choices work without questions, e.g.
-`--x green_wall_height_er --y alpha --color metric_std --vmin 0 --vmax 0.8
+`--x green_wall_height_er --y alpha --color sigma_x_um --vmin 0 --vmax 0.8
 --where drive_frequency_hz=3e6 --no-ask`, or as defaults near the top of
 `make_phase_diagram_CUDA.py` (`X_VARIABLE`, `Y_VARIABLE`, `COLOR_VARIABLE`,
 `COLOR_LIMITS`, `ASK_FOR_VARIABLES`).
