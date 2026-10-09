@@ -28,7 +28,7 @@ import compact_sweep
 import level_statistics as levels
 import run_phase_diagram_CUDA as runner
 from cuda_workflow_common import read_config, write_json_atomic
-from make_phase_diagram_CUDA import analyze
+from make_phase_diagram_CUDA import DATASET_COLUMNS, analyze
 from phase_metric import CSV_FIELDS, METRIC_NAME
 from test_parallel_sweep import FAKE_SOLVER
 
@@ -155,7 +155,7 @@ class SweepTests(unittest.TestCase):
             self.assertEqual(data["eta_matrix"].shape, (3, 2))
             self.assertAlmostEqual(float(data["eta_matrix"][0, 0]), float(rows[0]["eta"]), places=12)
         with outputs["csv"].open() as stream:
-            self.assertEqual(tuple(csv.DictReader(stream).fieldnames), CSV_FIELDS + COLUMNS)
+            self.assertEqual(tuple(csv.DictReader(stream).fieldnames), CSV_FIELDS + COLUMNS + DATASET_COLUMNS)
 
     def test_disabled_keeps_the_previous_columns(self):
         self.manifest["analysis_contract"]["level_statistics"] = None

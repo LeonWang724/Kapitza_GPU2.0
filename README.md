@@ -60,6 +60,40 @@ order. Single points and the GOE references can be recomputed from a terminal:
 .\.venv\Scripts\python.exe phase_diagram\simulation_core\level_statistics.py --goe 1000 200
 ```
 
+### Choosing what MAKE plots
+
+`MAKE_PHASE_DIAGRAM_CUDA.bat` lists the columns it found and asks what to plot;
+press Enter to keep each default (IPR against alpha and frequency, automatic
+colour limits):
+
+```text
+Columns available for plotting
+  inputs:  alpha, drive_frequency_hz, lattice_depth_v0_er, ..., green_wall_height_er, ...
+  results: metric (IPR), metric_std, sigma_x, ..., mean_r, eta, ...
+x axis [alpha]:
+y axis [drive_frequency_hz]:
+colour [metric]: metric_std
+colour limits as 'min max', or 'auto' [auto]: 0 0.8
+```
+
+Only columns present in that dataset are offered, so older results without the
+standard-deviation columns simply do not list them. Each row also carries the
+scan's lattice depth and green-wall height (0 without walls), sigma and gap.
+To plot along a parameter that is fixed within one scan, such as the wall
+height, pass several datasets or CSV files; when rows share a plotted point,
+MAKE asks which other input to fix (for example the frequency):
+
+```powershell
+.\MAKE_PHASE_DIAGRAM_CUDA.bat <walls_off_dataset> <walls_50ER_dataset> <walls_100ER_dataset>
+```
+
+Combined plots are saved under `results_cuda\combined_plots` with the rows
+used and their sources. The same choices work without questions, e.g.
+`--x green_wall_height_er --y alpha --color metric_std --vmin 0 --vmax 0.8
+--where drive_frequency_hz=3e6 --no-ask`, or as defaults near the top of
+`make_phase_diagram_CUDA.py` (`X_VARIABLE`, `Y_VARIABLE`, `COLOR_VARIABLE`,
+`COLOR_LIMITS`, `ASK_FOR_VARIABLES`).
+
 Version 3.0 added cold-atom **Klein tunneling in an engineered bichromatic optical
 lattice**. It prepares a moving packet in the upper excited Bloch band, evolves
 it through a smooth barrier with the existing complex128 CUDA solver, and
