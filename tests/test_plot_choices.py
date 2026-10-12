@@ -215,6 +215,18 @@ class PlotChoiceTests(unittest.TestCase):
         self.assertEqual(images, ["eta.png", "metric.png", "sigma_x.png", "sigma_x_um.png"])
         self.assertFalse((self.root / "unused").exists())
 
+    def test_signed_eta_is_derived_from_existing_columns(self):
+        path = self.root / "levels.csv"
+        path.write_text("alpha,drive_frequency_hz,metric,mean_r,mean_r_squared,eta,eta_r_squared\n"
+                        "1,5,0.5,0.334,0.20,0.36,0.31\n2,5,0.7,0.474,0.31,0.61,0.71\n")
+        rows = make.read_csv_rows(path)
+        from level_statistics import R2_GOE, R2_POISSON, R_GOE, R_POISSON
+        self.assertAlmostEqual(rows[0]["eta_signed"], (0.334 - R_POISSON) / (R_GOE - R_POISSON))
+        self.assertLess(rows[0]["eta_signed"], 0)            # clustering stays negative
+        self.assertAlmostEqual(abs(rows[0]["eta_signed"]), 0.36, places=2)   # |signed| = eta
+        self.assertAlmostEqual(rows[1]["eta_r_squared_signed"], (0.31 - R2_POISSON) / (R2_GOE - R2_POISSON))
+        self.assertIn("eta_signed", make.colors_to_plot(rows, "alpha", "drive_frequency_hz", "all"))
+
     def test_terminal_all_skips_the_limit_question(self):
         rows = self.rows(self.walls_off)
         answers = iter(["", "", "all"])

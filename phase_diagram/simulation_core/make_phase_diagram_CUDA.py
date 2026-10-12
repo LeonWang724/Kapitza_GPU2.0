@@ -23,6 +23,7 @@ import tables as tb
 
 from create_initial_state_function import GRID_SPACING_M
 from cuda_workflow_common import RESULTS_DIRECTORY, phase_dataset_label, read_config
+from level_statistics import R2_GOE, R2_POISSON, R_GOE, R_POISSON
 from phase_metric import (
     LEVEL_STATISTICS_FIELDS, STATISTICS_FIELDS, csv_fields, csv_row, level_statistics_columns,
     statistics_from_probabilities,
@@ -62,6 +63,8 @@ COLUMN_TITLES = {
     "mean_r_squared": r"$\langle r^2 \rangle$",
     "eta": r"$\eta$ from $\langle r \rangle$",
     "eta_r_squared": r"$\eta$ from $\langle r^2 \rangle$",
+    "eta_signed": r"Signed $\eta$ from $\langle r \rangle$ (0 Poisson, 1 GOE, < 0 clustering)",
+    "eta_r_squared_signed": r"Signed $\eta$ from $\langle r^2 \rangle$ (0 Poisson, 1 GOE, < 0 clustering)",
     "lattice_depth_v0_er": r"Lattice depth $V_0$ ($E_R$)",
     "green_wall_height_er": r"Green wall height ($E_R$)",
     "green_wall_sigma_um": r"Green wall $\sigma$ ($\mu$m)",
@@ -69,18 +72,26 @@ COLUMN_TITLES = {
 }
 # The lab's standard deviation of |psi|^2 is the cloud width sigma_x; the CSV
 # stores it in solver length units, which are the generator's 23 nm grid spacing.
-DERIVED_COLUMNS = ("sigma_x_um",)
+# eta without the absolute value: unbiased at the Poisson end, and negative
+# when levels cluster more than Poisson levels do.
+DERIVED_COLUMNS = ("sigma_x_um", "eta_signed", "eta_r_squared_signed")
 # Short descriptions shown when MAKE lists the columns.
 COLUMN_NOTES = {
     "metric": "IPR",
     "sigma_x_um": "standard deviation of |psi|^2, the cloud width",
     "metric_std": "time fluctuation of the IPR",
+    "eta_signed": "eta without the absolute value (negative = clustering)",
 }
 
 
 def add_derived_columns(row: dict) -> dict:
     if row.get("sigma_x") is not None and row.get("sigma_x_um") is None:
         row["sigma_x_um"] = float(row["sigma_x"]) * GRID_SPACING_M * 1e6
+    if row.get("mean_r") is not None and row.get("eta_signed") is None:
+        row["eta_signed"] = (float(row["mean_r"]) - R_POISSON) / (R_GOE - R_POISSON)
+    if row.get("mean_r_squared") is not None and row.get("eta_r_squared_signed") is None:
+        row["eta_r_squared_signed"] = ((float(row["mean_r_squared"]) - R2_POISSON)
+                                       / (R2_GOE - R2_POISSON))
     return row
 
 
