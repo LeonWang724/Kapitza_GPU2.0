@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import faulthandler
 from pathlib import Path
 
 from cuda_workflow_common import (
@@ -19,6 +20,9 @@ def run_full_sweep(
     *, results_root: Path, manifest: dict, base_config: Path,
     executable: Path, device: int, floquet_mode: str, create_initial_state,
 ) -> None:
+    # Report native crashes, which bypass Python's error handling.
+    if not faulthandler.is_enabled():
+        faulthandler.enable()
     grid = manifest["parameter_grid"]
     manifest_path = results_root / "run_manifest.json"
     manifest["runs"] = []

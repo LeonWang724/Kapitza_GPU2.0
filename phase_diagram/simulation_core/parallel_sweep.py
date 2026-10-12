@@ -6,6 +6,7 @@ import argparse
 import copy
 import csv
 import ctypes
+import faulthandler
 import json
 import os
 import shutil
@@ -258,7 +259,9 @@ def run_parallel_sweep(
                         # Re-read to cover a worker finishing between reads.
                         worker = read_manifest(path)
                         if worker["status"] != "completed":
-                            raise RuntimeError(f"Tab {entry['worker_index'] + 1} exited or did not start; see {path.parent}")
+                            raise RuntimeError(
+                                f"Tab {entry['worker_index'] + 1} exited or did not start; see {path.parent} "
+                                "(fatal_error.txt there records a crash)")
                 states.append(worker)
             completed = sum(worker.get("completed_points", 0) for worker in states)
             finished = sum(worker["status"] == "completed" for worker in states)
@@ -298,6 +301,21 @@ def run_parallel_sweep(
 
 def worker_main(manifest_path: Path) -> int:
     manifest_path = manifest_path.resolve()
+    # A native crash skips the handlers below; faulthandler still writes the
+    # Python stack of every thread here. The file is removed if nothing crashed.
+    fatal_path = manifest_path.parent / "fatal_error.txt"
+    fatal_log = fatal_path.open("w", encoding="utf-8")
+    faulthandler.enable(file=fatal_log, all_threads=True)
+    try:
+        return run_worker(manifest_path)
+    finally:
+        faulthandler.disable()
+        fatal_log.close()
+        if fatal_path.stat().st_size == 0:
+            fatal_path.unlink()
+
+
+def run_worker(manifest_path: Path) -> int:
     manifest = read_manifest(manifest_path)
     manifest["worker_pid"] = os.getpid()
     manifest["status"] = "running"
@@ -327,12 +345,13 @@ def worker_main(manifest_path: Path) -> int:
         print("Assigned points completed.", flush=True)
         return 0
     except BaseException as error:
+        # Keep the reason first, even if the status update below fails.
+        (manifest_path.parent / "worker_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
+        traceback.print_exc()
         manifest["status"] = "cancelled" if isinstance(error, KeyboardInterrupt) else "failed"
         manifest["error"] = str(error)
         manifest["finished_utc"] = utc_now()
         write_json_atomic(manifest_path, manifest)
-        (manifest_path.parent / "worker_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
-        traceback.print_exc()
         return 1
 
 

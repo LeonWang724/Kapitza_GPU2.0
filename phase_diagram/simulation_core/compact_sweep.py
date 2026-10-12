@@ -7,12 +7,11 @@ inputs, config, status and scalar summary.
 from __future__ import annotations
 
 import csv
+import faulthandler
 import json
 import os
 import shutil
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Callable
 
@@ -43,6 +42,9 @@ def run_compact_sweep(
     executable: Path, device: int, floquet_mode: str,
     create_initial_state: Callable,
 ) -> None:
+    # Report native crashes, which bypass Python's error handling.
+    if not faulthandler.is_enabled():
+        faulthandler.enable()
     manifest_path = results_root / "run_manifest.json"
     contract = manifest["analysis_contract"]
     solver = manifest.get("solver", {})
@@ -73,12 +75,7 @@ def run_compact_sweep(
         table.flush()
         # Reuse one small scratch directory for the entire sweep. It holds only
         # the current batch's inputs/logs/status/configs and scalar outputs.
-        # Level statistics need only each point's parameters, so one background
-        # thread computes them on the CPU while the GPU runs the batch.
-        with (
-            tempfile.TemporaryDirectory(prefix=".work_", dir=results_root) as temporary,
-            ThreadPoolExecutor(max_workers=1) if level_settings else nullcontext() as levels,
-        ):
+        with tempfile.TemporaryDirectory(prefix=".work_", dir=results_root) as temporary:
             work = Path(temporary)
             for batch in batched(grid_points(manifest), batch_size):
                 # Delete only this runner's previous scratch artifacts.
@@ -89,9 +86,6 @@ def run_compact_sweep(
                         path.unlink()
                 records, points = [], []
                 failing_index = batch[0][0]
-                pending = [levels.submit(level_statistics_task,
-                                         (grid["lattice_depth_v0_er"], alpha, frequency, level_settings))
-                           for _, _, _, alpha, frequency in batch] if levels else []
                 try:
                     for position, (index, alpha_index, frequency_index, alpha, frequency) in enumerate(batch):
                         failing_index = index
@@ -129,6 +123,14 @@ def run_compact_sweep(
                         record["input_sha256"] = {name: sha256_file(path) for name, path in inputs.items()}
                         record["config_sha256"] = sha256_file(config_path)
                         points.append((config_path, summary_path, generated))
+                    # Level statistics need only each point's parameters. They run
+                    # in this thread on purpose: numpy's linear algebra can crash a
+                    # Windows process when two threads use it at once.
+                    for record, (_, _, _, alpha, frequency) in zip(records, batch):
+                        if level_settings:
+                            failing_index = record["run_index"]
+                            record["level_statistics"] = level_statistics_task(
+                                (grid["lattice_depth_v0_er"], alpha, frequency, level_settings))
                     failing_index = batch[0][0]
                     if len(batch) > 1:
                         print(f"\nSimulating points {batch[0][0]:03d}-{batch[-1][0]:03d} "
@@ -153,9 +155,6 @@ def run_compact_sweep(
                         value, _ = validate_summary(summary, generated, contract)
                         record["metric_summary"] = summary
                         values.append(value)
-                    for record, future in zip(records, pending):
-                        failing_index = record["run_index"]
-                        record["level_statistics"] = future.result()
                     for record, (_, _, generated) in zip(records, points):
                         record["status"] = "completed"
                         record["finished_utc"] = utc_now()
@@ -189,6 +188,4 @@ def run_compact_sweep(
                     if len(batch) > 1:
                         manifest["failed_batch_run_indices"] = [point[0] for point in batch]
                     write_json_atomic(manifest_path, manifest)
-                    for future in pending:
-                        future.cancel()
                     raise
