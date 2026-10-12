@@ -189,6 +189,41 @@ class PlotChoiceTests(unittest.TestCase):
         sources = json.loads(next((self.root / "combined_plots").glob("*_sources.json")).read_text())
         self.assertEqual(sources["where"], {"drive_frequency_hz": 1e6})
 
+    def test_all_plots_every_varying_result_with_automatic_limits(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            outputs = make.analyze(self.walls_off / "run_manifest.json", color="all",
+                                   color_limits=(0.0, 0.8))
+        names = [path.name.split("Z_", 1)[1] for path in outputs["images"]]
+        # snapshots_averaged and the spatial columns are constant here: no picture.
+        self.assertEqual(names, ["phase_diagram.png", "metric_std.png", "metric_variance.png"])
+        self.assertTrue(all(path.is_file() for path in outputs["images"]))
+        self.assertEqual(outputs["image"], outputs["images"][0])
+
+    def test_single_csv_plots_beside_the_csv(self):
+        folder = self.root / "scan"
+        folder.mkdir()
+        path = folder / "metrics.csv"
+        lines = ["run_index,alpha,drive_frequency_hz,snapshots_averaged,metric,sigma_x,eta"]
+        for index, (alpha, frequency) in enumerate((a, f) for a in (1, 2) for f in (5e5, 6e5)):
+            lines.append(f"{index},{alpha},{frequency},30,{alpha * frequency / 1e6},{10 * alpha},{alpha / 4}")
+        path.write_text("\n".join(lines) + "\n")
+        with (patch.object(make, "RESULTS_DIRECTORY", self.root / "unused"),
+              patch.object(sys, "argv", ["make", str(path), "--color", "all", "--no-ask"]),
+              contextlib.redirect_stdout(io.StringIO())):
+            self.assertEqual(make.main(), 0)
+        images = sorted(path.name.split("Z_", 1)[1] for path in (folder / "analysis").glob("Plot_*.png"))
+        self.assertEqual(images, ["eta.png", "metric.png", "sigma_x.png", "sigma_x_um.png"])
+        self.assertFalse((self.root / "unused").exists())
+
+    def test_terminal_all_skips_the_limit_question(self):
+        rows = self.rows(self.walls_off)
+        answers = iter(["", "", "all"])
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            choice = make.ask_plot_settings(rows, "alpha", "drive_frequency_hz", "metric", (0.0, 1.0), {},
+                                            ask=lambda prompt: next(answers))
+        self.assertEqual(choice, ("alpha", "drive_frequency_hz", "all", None, {}))
+        self.assertIn("automatic colour limits", output.getvalue())
+
     def test_command_line_rejects_bad_where(self):
         with patch.object(sys, "argv", ["make", str(self.walls_off), "--where", "alpha", "--no-ask"]):
             with self.assertRaises(SystemExit):

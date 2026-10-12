@@ -95,6 +95,15 @@ MAKE asks which other input to fix (for example the frequency):
 .\MAKE_PHASE_DIAGRAM_CUDA.bat <walls_off_dataset> <walls_50ER_dataset> <walls_100ER_dataset>
 ```
 
+Answer `all` at the colour question, or pass `--color all`, for one picture
+per result column that varies across the scan, each with automatic colour
+limits. A CSV path plots that file, e.g. a finished scan's `metrics.csv`, with
+the pictures saved in an `analysis` folder beside it:
+
+```powershell
+.\MAKE_PHASE_DIAGRAM_CUDA.bat path\to\metrics.csv --color all --no-ask
+```
+
 Combined plots are saved under `results_cuda\combined_plots` with the rows
 used and their sources. The same choices work without questions, e.g.
 `--x green_wall_height_er --y alpha --color sigma_x_um --vmin 0 --vmax 0.8

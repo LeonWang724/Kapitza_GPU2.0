@@ -40,7 +40,7 @@ PLOT_TITLE: str | None = None
 ASK_FOR_VARIABLES = True
 X_VARIABLE = "alpha"
 Y_VARIABLE = "drive_frequency_hz"
-COLOR_VARIABLE = "metric"        # the IPR, mean discrete sum_j |psi_j|^4
+COLOR_VARIABLE = "metric"        # the IPR, mean discrete sum_j |psi_j|^4; "all" plots every result
 # None for automatic colour limits, or (minimum, maximum) such as (0.0, 0.8).
 COLOR_LIMITS: tuple[float | None, float | None] | None = None
 # None picks a title for the plotted column.
@@ -92,6 +92,10 @@ DATASET_COLUMNS = (
 )
 # Inputs that can be held fixed when several rows share one plotted point.
 PARAMETER_COLUMNS = ("alpha", "drive_frequency_hz") + DATASET_COLUMNS
+
+
+# Colour choice that draws one picture per result column.
+ALL_COLORS = "all"
 
 
 class OverlappingPointsError(ValueError):
@@ -358,6 +362,18 @@ def grid_from_rows(rows: list[dict], x: str, y: str, color: str):
     return xs, ys, values
 
 
+def colors_to_plot(rows: list[dict], x: str, y: str, color: str) -> list[str]:
+    """The colour column, or for "all" every result column that varies across the rows."""
+    if color != ALL_COLORS:
+        return [color]
+    columns = [name for name in numeric_columns(rows)
+               if name not in PARAMETER_COLUMNS and name not in ("run_index", x, y)
+               and len(distinct_values(rows, name)) > 1]
+    if not columns:
+        raise ValueError("No result column varies across these rows.")
+    return columns
+
+
 def plot_rows(rows: list[dict], path: Path, *, x: str, y: str, color: str,
               color_limits=None, title: str = "", x_title: str | None = None,
               y_title: str | None = None, color_title: str | None = None,
@@ -405,10 +421,13 @@ def ask_plot_settings(rows: list[dict], x: str, y: str, color: str, color_limits
 
     x = choose("x axis", x, columns)
     y = choose("y axis", y, columns)
-    color = choose("colour", color, columns)
+    color = choose(f"colour, or '{ALL_COLORS}' for every result", color, columns + [ALL_COLORS])
     shown = "auto" if color_limits is None else " ".join(
         "auto" if value is None else f"{value:g}" for value in color_limits)
-    while True:
+    if color == ALL_COLORS:
+        print("  Each picture gets automatic colour limits.")
+        color_limits = None
+    while color != ALL_COLORS:
         answer = ask(f"colour limits as 'min max', or 'auto' [{shown}]: ").strip().lower()
         if not answer:
             break
@@ -426,7 +445,8 @@ def ask_plot_settings(rows: list[dict], x: str, y: str, color: str, color_limits
     where = dict(where)
     while True:
         try:
-            grid_from_rows(select_rows(rows, where), x, y, color)
+            # Any numeric column checks the (x, y) grid; x always is one.
+            grid_from_rows(select_rows(rows, where), x, y, x if color == ALL_COLORS else color)
             return x, y, color, color_limits, where
         except OverlappingPointsError as error:
             if not error.columns:
@@ -451,7 +471,7 @@ def write_dataset_analysis(manifest_path: Path, data: dict, *, x: str = "alpha",
                            plot_title: str | None = None, x_axis_title: str | None = None,
                            y_axis_title: str | None = None,
                            colorbar_title: str | None = None) -> dict[str, Path]:
-    """Write the preserved NPZ, CSV and plot of one dataset."""
+    """Write the preserved NPZ, CSV and plot (or, for colour "all", plots) of one dataset."""
     manifest, root = data["manifest"], data["root"]
     grid, contract = manifest["parameter_grid"], manifest["analysis_contract"]
     analysis_directory = root / "analysis"
@@ -464,8 +484,6 @@ def write_dataset_analysis(manifest_path: Path, data: dict, *, x: str = "alpha",
     artifact_stem = f"Analysis_{analyzed_utc}"
     npz_path = analysis_directory / f"{artifact_stem}_metric.npz"
     csv_path = analysis_directory / f"{artifact_stem}_metric.csv"
-    image_path = analysis_directory / (f"{artifact_stem}_phase_diagram.png" if color == "metric"
-                                       else f"{artifact_stem}_{color}.png")
     np.savez(
         npz_path,
         dataset_name=dataset_name,
@@ -482,15 +500,22 @@ def write_dataset_analysis(manifest_path: Path, data: dict, *, x: str = "alpha",
     title = plot_title or automatic_plot_title(grid)
     if where:
         title += "\n" + ", ".join(f"{column} = {value:g}" for column, value in where.items())
-    plot_rows(select_rows(data["rows"], where or {}), image_path, x=x, y=y, color=color,
-              color_limits=color_limits, title=title, x_title=x_axis_title,
-              y_title=y_axis_title, color_title=colorbar_title, colormap=contract["colormap"],
-              invert_frequency=bool(contract.get("frequency_axis_inverted", True)))
+    selected = select_rows(data["rows"], where or {})
+    images = []
+    for column in colors_to_plot(selected, x, y, color):
+        image_path = analysis_directory / (f"{artifact_stem}_phase_diagram.png" if column == "metric"
+                                           else f"{artifact_stem}_{column}.png")
+        images.append(plot_rows(
+            selected, image_path, x=x, y=y, color=column,
+            color_limits=None if color == ALL_COLORS else color_limits, title=title,
+            x_title=x_axis_title, y_title=y_axis_title,
+            color_title=None if color == ALL_COLORS else colorbar_title,
+            colormap=contract["colormap"],
+            invert_frequency=bool(contract.get("frequency_axis_inverted", True))))
     print(f"Saved preserved analysis files to {analysis_directory}")
-    print(f"  {image_path.name}")
-    print(f"  {csv_path.name}")
-    print(f"  {npz_path.name}")
-    return {"npz": npz_path, "csv": csv_path, "image": image_path}
+    for path in (*images, csv_path, npz_path):
+        print(f"  {path.name}")
+    return {"npz": npz_path, "csv": csv_path, "image": images[0], "images": images}
 
 
 def analyze(manifest_path: Path, **plot_settings) -> dict[str, Path]:
@@ -525,7 +550,7 @@ def main() -> int:
     parser.add_argument("--x", default=X_VARIABLE, help="column for the x axis")
     parser.add_argument("--y", default=Y_VARIABLE, help="column for the y axis")
     parser.add_argument("--color", default=COLOR_VARIABLE,
-                        help="column for the colour (metric is the IPR)")
+                        help="column for the colour (metric is the IPR), or 'all' for one plot per result")
     parser.add_argument("--vmin", type=float, help="lower colour limit (default automatic)")
     parser.add_argument("--vmax", type=float, help="upper colour limit (default automatic)")
     parser.add_argument("--where", action="append", default=[], metavar="COLUMN=VALUE",
@@ -575,32 +600,44 @@ def main() -> int:
                                where=where, plot_title=arguments.title, **titles)
         return 0
 
-    # Several inputs: one combined plot, the rows it was drawn from and their sources.
-    output = RESULTS_DIRECTORY / "combined_plots"
-    output.mkdir(parents=True, exist_ok=True)
-    stem = "Combined_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    # CSV input or several inputs. A single CSV keeps its plots in an analysis
+    # folder beside it; combinations go to results_cuda/combined_plots with the
+    # rows used and their sources.
     selected = select_rows(rows, where)
-    columns: list[str] = []
-    for row in selected:
-        columns.extend(key for key in row if key not in columns)
-    csv_path = output / f"{stem}.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        writer.writerows(selected)
+    colors = colors_to_plot(selected, x, y, color)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     sources = [path.parent.name for path, _ in datasets] + [path.name for path in tables]
-    title = arguments.title or f"{len(sources)} datasets combined"
+    if len(tables) == 1 and not datasets:
+        output, stem = tables[0].parent / "analysis", f"Plot_{stamp}"
+        title = arguments.title or tables[0].stem.replace("_", " ")
+    else:
+        output, stem = RESULTS_DIRECTORY / "combined_plots", f"Combined_{stamp}"
+        title = arguments.title or f"{len(sources)} datasets combined"
+    output.mkdir(parents=True, exist_ok=True)
     if where:
         title += "\n" + ", ".join(f"{column} = {value:g}" for column, value in where.items())
-    image = plot_rows(selected, output / f"{stem}.png", x=x, y=y, color=color,
-                      color_limits=limits, title=title, x_title=titles["x_axis_title"],
-                      y_title=titles["y_axis_title"], color_title=titles["colorbar_title"])
-    (output / f"{stem}_sources.json").write_text(json.dumps(
-        {"sources": sources, "x": x, "y": y, "color": color, "color_limits": limits,
-         "where": where}, indent=2) + "\n", encoding="utf-8")
-    print(f"Saved combined plot to {output}")
-    print(f"  {image.name}")
-    print(f"  {csv_path.name}")
+    images = [plot_rows(selected, output / (f"{stem}.png" if len(colors) == 1 else f"{stem}_{column}.png"),
+                        x=x, y=y, color=column, color_limits=None if color == ALL_COLORS else limits,
+                        title=title, x_title=titles["x_axis_title"], y_title=titles["y_axis_title"],
+                        color_title=None if color == ALL_COLORS else titles["colorbar_title"])
+              for column in colors]
+    written = list(images)
+    if stem.startswith("Combined_"):
+        columns: list[str] = []
+        for row in selected:
+            columns.extend(key for key in row if key not in columns)
+        csv_path = output / f"{stem}.csv"
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns)
+            writer.writeheader()
+            writer.writerows(selected)
+        (output / f"{stem}_sources.json").write_text(json.dumps(
+            {"sources": sources, "x": x, "y": y, "color": colors, "color_limits": limits,
+             "where": where}, indent=2) + "\n", encoding="utf-8")
+        written.append(csv_path)
+    print(f"Saved plots to {output}")
+    for path in written:
+        print(f"  {path.name}")
     return 0
 
 
