@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Callable
 
 from cuda_workflow_common import (
-    SCRIPT_DIRECTORY, generate_point_inputs, grid_points, read_config, run_logged, sha256_file,
-    update_config, utc_now, write_json_atomic,
+    SCRIPT_DIRECTORY, generate_point_inputs, grid_points, point_drive_phase, read_config,
+    run_logged, sha256_file, update_config, utc_now, write_json_atomic,
 )
 from level_statistics import level_statistics_task
 from phase_metric import csv_fields, csv_row, expected_sampling, validate_summary
@@ -120,6 +120,10 @@ def run_compact_sweep(
                         })
                         generated = read_config(config_path)
                         record["floquet_omega_dimensionless"] = float(generated["floquet_omega"])
+                        drive_phase = point_drive_phase(grid, alpha)
+                        if drive_phase is not None:  # 5.0: sin(omega t + drive_phase)
+                            record["drive_phase_radians"] = drive_phase
+                            record["floquet_phase"] = float(generated["floquet_phase"])
                         record["input_sha256"] = {name: sha256_file(path) for name, path in inputs.items()}
                         record["config_sha256"] = sha256_file(config_path)
                         points.append((config_path, summary_path, generated))

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -31,6 +32,31 @@ def grid_points(manifest: dict):
                grid["alpha_values"][alpha_index], frequencies[frequency_index])
 
 
+def experiment_drive_phase(alpha: float, inverted: bool) -> float:
+    """Phase phi of the 5.0 drive sin(omega t + phi), chosen as in the experiment.
+
+    Non-inverted: 0. Inverted: arcsin(-2/alpha), which makes
+    1 + alpha sin(phi) = -1, so the lattice at t = 0 is flipped and the atoms
+    start on top of the time-averaged lattice. Here alpha is the experiment's
+    alpha*beta; the inverted case needs alpha >= 2.
+    """
+    if not isinstance(inverted, bool):
+        raise ValueError("INVERTED must be True or False.")
+    if not inverted:
+        return 0.0
+    alpha = float(alpha)
+    if not alpha >= 2.0:
+        raise ValueError(f"Inverted loading needs every alpha >= 2; got alpha = {alpha:g}.")
+    return math.asin(-2.0 / alpha)
+
+
+def point_drive_phase(grid: dict, alpha: float) -> float | None:
+    """The 5.0 drive phase of a grid point, or None for a 4.0 grid."""
+    if "inverted" not in grid:
+        return None
+    return experiment_drive_phase(alpha, grid["inverted"])
+
+
 def generate_point_inputs(
     base_config: Path, config_path: Path, input_directory: Path,
     grid: dict, alpha: float, frequency: float, create_initial_state,
@@ -41,11 +67,16 @@ def generate_point_inputs(
     shutil.copy2(base_config, config_path)
     # Older manifests have no green walls; generators then see no new keyword.
     walls = grid.get("green_walls")
+    extra = {"green_walls": walls} if walls else {}
+    # 5.0 grids record "inverted" and use the experiment's drive phase with a
+    # fixed lattice; 4.0 grids record the lattice's position phase instead.
+    drive_phase = point_drive_phase(grid, alpha)
+    if drive_phase is not None:
+        extra["drive_phase"] = drive_phase
     create_initial_state(
         grid["lattice_depth_v0_er"], float(alpha), float(frequency),
-        grid["phase_radians"], grid["initial_lattice_depth_v0_er"],
-        output_directory=input_directory, config_path=config_path,
-        **({"green_walls": walls} if walls else {}),
+        grid.get("phase_radians", 0.0), grid["initial_lattice_depth_v0_er"],
+        output_directory=input_directory, config_path=config_path, **extra,
     )
     inputs = {name: input_directory / name
               for name in ("lattice_gauss.h5", "vstatic.h5", "vflo.h5")}
@@ -65,12 +96,22 @@ def phase_dataset_label(
     initial_lattice_depth_v0_er: float,
     phase_radians: float,
     green_walls: dict | None = None,
+    *,
+    inverted: bool | None = None,
 ) -> str:
-    """Build the shared descriptive label used by datasets and analysis files."""
+    """Build the shared descriptive label used by datasets and analysis files.
+
+    5.0 scans pass `inverted` and are labelled Inverted or NonInverted; 4.0
+    scans keep the position phase in the label.
+    """
+    if inverted is None:
+        start = f"Phase_{parameter_token(phase_radians)}rad"
+    else:
+        start = "Inverted" if inverted else "NonInverted"
     label = (
         f"LatticeDepth_{parameter_token(lattice_depth_v0_er)}ER_"
         f"InitialDepth_{parameter_token(initial_lattice_depth_v0_er)}ER_"
-        f"Phase_{parameter_token(phase_radians)}rad"
+        f"{start}"
     )
     if green_walls:
         label += (

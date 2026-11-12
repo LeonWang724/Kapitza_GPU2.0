@@ -34,7 +34,7 @@ def prepare_points(work: Path, count: int, iterations: int) -> list[Path]:
     grid = {
         "lattice_depth_v0_er": runner.LATTICE_DEPTH_V0_ER,
         "initial_lattice_depth_v0_er": runner.INITIAL_LATTICE_DEPTH_V0_ER,
-        "phase_radians": runner.PHASE_RADIANS,
+        "inverted": runner.INVERTED,
     }
     points = [(float(alpha), float(frequency)) for alpha in runner.ALPHA_VALUES
               for frequency in runner.DRIVE_FREQUENCY_HZ_VALUES]

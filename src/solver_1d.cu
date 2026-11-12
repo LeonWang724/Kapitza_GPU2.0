@@ -198,7 +198,7 @@ SolverResult run_reference_solver_1d(const ConfigData& config,
 
     for (int count = 0; count < config.number_of_iterations; ++count) {
         if (config.floquet_potential) {
-            floquet_factor = std::cos(config.floquet_omega * total_time);
+            floquet_factor = std::cos(config.floquet_omega * total_time + config.floquet_phase);
             launch_update_floquet(static_potential.data(), floquet_base.data(),
                                   floquet_work.data(), potential.data(), points,
                                   floquet_factor, options.floquet_mode);
@@ -322,7 +322,7 @@ public:
           points_(configs.front().points_x),
           total_(static_cast<std::size_t>(points_) * configs.size()),
           compact_(!configs.front().phase_metric_file.empty()),
-          clock_(omegas(configs), configs.front().time_step),
+          clock_(omegas(configs), configs.front().time_step, phases(configs)),
           psi_(total_),
           psi_half_(total_),
           psi_k_(total_),
@@ -489,6 +489,12 @@ private:
     static std::vector<double> omegas(const std::vector<ConfigData>& configs) {
         std::vector<double> values;
         for (const ConfigData& config : configs) values.push_back(config.floquet_omega);
+        return values;
+    }
+
+    static std::vector<double> phases(const std::vector<ConfigData>& configs) {
+        std::vector<double> values;
+        for (const ConfigData& config : configs) values.push_back(config.floquet_phase);
         return values;
     }
 

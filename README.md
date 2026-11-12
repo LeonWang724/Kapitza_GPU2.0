@@ -1,4 +1,53 @@
-# Kapitza_GPU4.0
+# Kapitza_GPU5.0
+
+Version 5.0 drives and loads the lattice **as in the experiment**. The lattice
+stays fixed and the drive is a sine with a phase:
+
+```text
+5.0:  H(t) = p^2/2m - V0 [1 + alpha sin(omega t + phi)] cos^2(kL x)
+4.0:  H(t) = p^2/2m - V0 [1 + alpha cos(omega t)] cos^2(kL x + PHASE_RADIANS/2)
+```
+
+`alpha` is the experiment's alpha*beta. The atoms start in the ground state of
+the lattice at t = 0 at `INITIAL_LATTICE_DEPTH_V0_ER`,
+`-V_init [1 + alpha sin(phi)] cos^2(kL x)`, as they are loaded in the
+experiment, so at t = 0 only the depth changes (V_init to V0). In 4.0 the drive
+started at cos(0) = 1, so the lattice jumped to (1 + alpha) V0 at t = 0, and
+flipped for the inverted case.
+
+`INVERTED` in `phase_diagram/simulation_core/run_phase_diagram_CUDA.py`
+replaces `PHASE_RADIANS`:
+
+| `INVERTED` | phi | Atoms start | Lattice at t = 0 |
+| --- | --- | --- | --- |
+| `False` | 0 | bottom, cos^2(kL x) = 1 | -V0 cos^2(kL x) |
+| `True` | arcsin(-2/alpha), for each alpha; needs alpha >= 2 | top of the time-averaged lattice, cos^2(kL x) = 0 | +V0 cos^2(kL x) (flipped) |
+
+Datasets are named `..._Inverted_...` or `..._NonInverted_...`, MAKE's
+analysis CSV has an `inverted` column (1 or 0; blank for 4.0 data, which keeps
+`phase_radians`), and `point_results.jsonl` records each point's
+`drive_phase_radians`.
+
+The solver change is one config key, `floquet_phase`: the drive is
+cos(omega t + floquet_phase), and 5.0 writes floquet_phase = phi - pi/2, which
+is sin(omega t + phi). Without the key it is 0, the 4.0 drive bit for bit. Rebuild
+and validate on the Windows machine before scanning:
+
+```powershell
+.\BUILD_CUDA.bat
+.\VALIDATE_FAST_CUDA.bat
+.\VALIDATE_COMPACT_CUDA.bat
+```
+
+`VALIDATE_FAST_CUDA.bat` now also checks the 5.0 drive phase: the fused loop
+against the original loop bit for bit, and a batch mixing 4.0 and 5.0 points.
+The runner refuses an executable built before 5.0, which would ignore the
+phase. Everything else is unchanged: the absorber, green walls, the analysis,
+and the level statistics (Floquet quasienergies do not depend on where in the
+cycle the drive starts). Validation against the CPU reference still uses the
+4.0 inputs. Version 4.0 stays on the `ExpansionUpgrade1.0` branch.
+
+## Version 4.0
 
 Version 4.0 adds optional **green walls** to the phase diagram: two repulsive
 Gaussian potential walls around the initial wavefunction. Set them in the

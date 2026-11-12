@@ -6,8 +6,8 @@ import faulthandler
 from pathlib import Path
 
 from cuda_workflow_common import (
-    generate_point_inputs, grid_points, read_config, run_logged, sha256_file,
-    update_config, utc_now, write_json_atomic,
+    generate_point_inputs, grid_points, point_drive_phase, read_config, run_logged,
+    sha256_file, update_config, utc_now, write_json_atomic,
 )
 from level_statistics import level_statistics_task
 
@@ -46,13 +46,17 @@ def run_full_sweep(
             "drive_frequency_hz": frequency,
             "lattice_depth_v0_er": grid["lattice_depth_v0_er"],
             "initial_lattice_depth_v0_er": grid["initial_lattice_depth_v0_er"],
-            "phase_radians": grid["phase_radians"],
             "status": "running", "started_utc": utc_now(),
             "output_directory": relative(output, results_root),
             "config_file": relative(config, results_root),
             "status_file": relative(status, results_root),
             "log_file": relative(log, results_root),
         }
+        if "inverted" in grid:  # 5.0: experiment drive phase, fixed lattice
+            record["inverted"] = grid["inverted"]
+            record["drive_phase_radians"] = point_drive_phase(grid, alpha)
+        else:
+            record["phase_radians"] = grid["phase_radians"]
         manifest["runs"].append(record)
         write_json_atomic(manifest_path, manifest)
         try:

@@ -143,7 +143,12 @@ struct Case {
     double beta = 0.0;
     bool floquet = true;
     std::vector<double> omegas{1.7};
+    std::vector<double> phases{};  // one per system; empty means 0 (the 4.0 drive)
 };
+
+double phase_of(const Case& test, std::size_t system) {
+    return test.phases.empty() ? 0.0 : test.phases[system];
+}
 
 struct SystemInputs {
     Field psi;
@@ -178,7 +183,8 @@ bool wants_state(const Case& test, const PhaseMetricAccumulator& metric, int cou
 }
 
 // The real-time loop of run_reference_solver_1d, recording every iteration.
-Observations reference_run(const Case& test, const SystemInputs& inputs, double omega) {
+Observations reference_run(const Case& test, const SystemInputs& inputs, double omega,
+                           double phase) {
     const int n = test.points;
     Field psi = inputs.psi, psi_half(n), psi_k(n);
     Field potential = inputs.static_potential;
@@ -189,7 +195,7 @@ Observations reference_run(const Case& test, const SystemInputs& inputs, double 
     Observations observed;
     for (int count = 0; count < test.iterations; ++count) {
         if (test.floquet) {
-            floquet_factor = std::cos(omega * total_time);
+            floquet_factor = std::cos(omega * total_time + phase);
             original_update_floquet(inputs.static_potential, inputs.floquet_base, potential,
                                     floquet_factor);
             total_time += test.time_step;
@@ -213,7 +219,7 @@ public:
         : test_(test),
           systems_(static_cast<int>(inputs.size())),
           n_(test.points),
-          clock_(test.omegas, test.time_step),
+          clock_(test.omegas, test.time_step, test.phases),
           metric_(test.iterations, test.save_every, test.window, 0),
           propagator_(original_k_propagator(n_, test.step_x, test.time_step)) {
         for (const SystemInputs& system : inputs) {
@@ -341,7 +347,8 @@ void run_case(const Case& test) {
 
     const int n = test.points;
     for (std::size_t system = 0; system < inputs.size(); ++system) {
-        const Observations reference = reference_run(test, inputs[system], test.omegas[system]);
+        const Observations reference =
+            reference_run(test, inputs[system], test.omegas[system], phase_of(test, system));
         const std::size_t offset = system * static_cast<std::size_t>(n);
         for (const auto& [count, state] : fused.states) {
             const std::vector<Field>& expected = reference.at(count);
@@ -422,15 +429,25 @@ int main() {
         for (double beta : {0.0, -0.0, 0.37}) {
             for (bool floquet : {true, false}) {
                 for (const auto& omegas : std::vector<std::vector<double>>{{1.7}, {1.7, 0.31, 2.9}}) {
-                    Case test = schedule;
-                    test.beta = beta;
-                    test.floquet = floquet;
-                    test.omegas = omegas;
-                    test.name = schedule.name + " beta=" + std::to_string(beta) +
-                                (std::signbit(beta) ? "(-0)" : "") +
-                                (floquet ? " floquet" : " static") +
-                                " systems=" + std::to_string(omegas.size());
-                    cases.push_back(test);
+                    // 5.0 drive phases: sin(omega t) = cos(omega t - pi/2), and
+                    // the inverted phase arcsin(-2/alpha) - pi/2 for alpha = 4.
+                    for (bool phased : {false, true}) {
+                        Case test = schedule;
+                        test.beta = beta;
+                        test.floquet = floquet;
+                        test.omegas = omegas;
+                        if (phased) {
+                            const std::vector<double> drive{-1.5707963267948966,
+                                                            -2.0943951023931957, 0.4};
+                            test.phases.assign(drive.begin(), drive.begin() + omegas.size());
+                        }
+                        test.name = schedule.name + " beta=" + std::to_string(beta) +
+                                    (std::signbit(beta) ? "(-0)" : "") +
+                                    (floquet ? " floquet" : " static") +
+                                    " systems=" + std::to_string(omegas.size()) +
+                                    (phased ? " phased" : "");
+                        cases.push_back(test);
+                    }
                 }
             }
         }

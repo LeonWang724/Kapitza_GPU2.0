@@ -18,6 +18,7 @@ from cuda_workflow_common import (
     PORT_ROOT,
     RESULTS_DIRECTORY,
     SCRIPT_DIRECTORY,
+    experiment_drive_phase,
     git_provenance,
     locate_executable,
     phase_dataset_label,
@@ -37,7 +38,15 @@ ALPHA_VALUES = np.linspace(10.0, 120.0, 10)
 DRIVE_FREQUENCY_HZ_VALUES = np.linspace(1.0e6, 6.0e6, 10)
 LATTICE_DEPTH_V0_ER = 20.0
 INITIAL_LATTICE_DEPTH_V0_ER = 40.0
-PHASE_RADIANS = 0.0
+
+# 5.0: loading and drive as in the experiment. The lattice stays fixed,
+#   H(t) = p^2/2m - V0 [1 + alpha sin(omega t + phi)] cos^2(kL x),
+# with alpha the experiment's alpha*beta, and the atoms start in the ground
+# state of the lattice at t = 0 at INITIAL_LATTICE_DEPTH_V0_ER:
+#   False: non-inverted, phi = 0; atoms at the bottom (cos^2 = 1).
+#   True:  inverted, phi = arcsin(-2/alpha) for each alpha, so the lattice at
+#          t = 0 is flipped and the atoms start on top; needs every alpha >= 2.
+INVERTED = False
 
 # Green walls: two repulsive Gaussian walls around the initial wavefunction,
 # added to the static potential (the drive does not modulate them). They are
@@ -87,7 +96,7 @@ def green_wall_settings() -> tuple[dict | None, float | None]:
 def unique_results_directory(green_walls: dict | None) -> Path:
     timestamp = datetime.now(timezone.utc).strftime("cuda_%Y%m%dT%H%M%SZ")
     parameter_label = phase_dataset_label(
-        LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER, PHASE_RADIANS, green_walls
+        LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER, 0.0, green_walls, inverted=INVERTED
     )
     path = RESULTS_DIRECTORY / f"{parameter_label}_{timestamp}"
     if path.exists():
@@ -132,6 +141,8 @@ def main() -> int:
         level_statistics = (level_statistics_settings(LevelStatisticsQuasimomentum,
                                                       LevelStatisticsPlaneWaveCutoff)
                             if CalculateLevelStatistics else None)
+        # Checks INVERTED and, when inverted, that every alpha >= 2.
+        drive_phases = [experiment_drive_phase(alpha, INVERTED) for alpha in ALPHA_VALUES]
     except ValueError as error:
         parser.error(str(error))
     # Snapshot output and the reference loop keep one point per solver run.
@@ -141,6 +152,11 @@ def main() -> int:
     print_assignments(total, arguments.tabs, assignments)
     if batch > 1:
         print(f"Each tab simulates up to {batch} grid points at a time as one GPU batch.")
+    if INVERTED:
+        print(f"Loading: inverted. Drive sin(omega t + phi), phi = arcsin(-2/alpha) from "
+              f"{max(drive_phases):.4g} to {min(drive_phases):.4g} rad; atoms start on top.")
+    else:
+        print("Loading: non-inverted. Drive sin(omega t); atoms start at the bottom.")
     if green_walls:
         print(f"Green walls: {green_walls['height_er']:g} E_R high, sigma "
               f"{green_walls['sigma_um']:g} um, centres at +/-{green_walls['gap_um'] / 2:g} um; "
@@ -181,6 +197,12 @@ def main() -> int:
             f"--batch {batch} exceeds this executable's limit of "
             f"{build_info.get('max_batch_systems', 1)} points per GPU batch."
         )
+    # An older solver would ignore floquet_phase and silently drive cos(omega t).
+    if build_info.get("drive_phase_version") != 1:
+        raise RuntimeError(
+            "This executable predates the 5.0 drive phase. Run BUILD_CUDA.bat, then "
+            "VALIDATE_FAST_CUDA.bat, before starting the scan."
+        )
     # Sleeping instead of spinning while waiting for the GPU leaves CPU power
     # and thermal headroom to the GPU, especially with several tabs.
     extra_arguments = (["--wait", "blocking"] if fused else []) + (
@@ -197,7 +219,7 @@ def main() -> int:
 
     manifest_path = results_root / "run_manifest.json"
     parameter_label = phase_dataset_label(
-        LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER, PHASE_RADIANS, green_walls
+        LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER, 0.0, green_walls, inverted=INVERTED
     )
     manifest = {
         "_codex_cuda_port": "Native CUDA phase-diagram run manifest.",
@@ -229,7 +251,10 @@ def main() -> int:
             ],
             "lattice_depth_v0_er": LATTICE_DEPTH_V0_ER,
             "initial_lattice_depth_v0_er": INITIAL_LATTICE_DEPTH_V0_ER,
-            "phase_radians": PHASE_RADIANS,
+            # 5.0: fixed lattice, drive sin(omega t + phi) with phi = 0, or
+            # arcsin(-2/alpha) per point when inverted (see INVERTED above).
+            "inverted": INVERTED,
+            "drive": "sin(omega t + phi)",
             # None, or the walls' height (E_R), sigma (um) and centre gap (um).
             "green_walls": green_walls,
         },

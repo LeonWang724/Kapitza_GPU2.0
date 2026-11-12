@@ -25,7 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "phase_diagram" / "simulation_core"
 sys.path.insert(0, str(CORE))
 from cuda_workflow_common import (
-    locate_executable, query_json, read_config, run_logged, update_config, write_json_atomic,
+    experiment_drive_phase, locate_executable, query_json, read_config, run_logged,
+    update_config, write_json_atomic,
 )
 from create_initial_state_function import create_init_state
 
@@ -88,8 +89,13 @@ def realistic_config(directory: Path, system: int, iterations: int) -> Path:
     path = directory / "run.config"
     shutil.copy2(CORE / "gpe1d.config", path)
     alpha, frequency = (30.0, 2.0e6), (90.0, 4.5e6)
-    create_init_state(20.0, alpha[system % 2] + 7.0 * system, frequency[system % 2],
-                      0.0, 40.0, output_directory=directory / "in", config_path=path)
+    value = alpha[system % 2] + 7.0 * system
+    # System 0 keeps the 4.0 drive cos(omega t); systems 1-3 use the 5.0 drive
+    # sin(omega t + phi): inverted, non-inverted, inverted.
+    inverted = (None, True, False, True)[system % 4]
+    extra = {} if inverted is None else {"drive_phase": experiment_drive_phase(value, inverted)}
+    create_init_state(20.0, value, frequency[system % 2],
+                      0.0, 40.0, output_directory=directory / "in", config_path=path, **extra)
     update_config(path, {
         "initial_state_file": directory / "in" / "lattice_gauss.h5",
         "potential_file": directory / "in" / "vstatic.h5",
@@ -255,7 +261,15 @@ def main() -> int:
             for system in range(1, 4):
                 run(executable, [realistic[system]], arguments.device,
                     work / "realistic" / f"single_{system}.log")
-            batch = [realistic_config(work / "realistic" / f"batch_{system}", system, iterations)
+            # The same check with the 5.0 drive phase (inverted loading).
+            reference_phase = realistic_config(work / "realistic" / "reference_phase", 1, iterations)
+            run(executable, [reference_phase], arguments.device,
+                work / "realistic" / "reference_phase.log", "--reference-loop")
+            assert_bitwise("realistic, 5.0 drive phase", outputs(reference_phase),
+                           outputs(realistic[1]))
+            record("realistic 65536-point grid with the 5.0 drive phase: fused == reference "
+                   "(bitwise)", iterations=iterations)
+            batch =[realistic_config(work / "realistic" / f"batch_{system}", system, iterations)
                      for system in range(4)]
             run(executable, batch, arguments.device, work / "realistic" / "batch.log")
             worst = max(relative_difference(outputs(single), outputs(batched))

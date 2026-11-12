@@ -36,7 +36,8 @@ import json, math, os, sys, time
 from pathlib import Path
 if "--version-json" in sys.argv:
     print(json.dumps({"compact_phase_metric_version": 1, "phase_statistics_version": 1,
-                      "fused_solver_version": 1, "max_batch_systems": 64})); raise SystemExit(0)
+                      "fused_solver_version": 1, "drive_phase_version": 1,
+                      "max_batch_systems": 64})); raise SystemExit(0)
 if "--device-info" in sys.argv:
     print(json.dumps({"device_index": 0, "name": "Test solver"})); raise SystemExit(0)
 

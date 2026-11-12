@@ -118,6 +118,7 @@ ConfigData read_config(const std::filesystem::path& config_path) {
     config.dynamic_potential = boolean_value(config.raw_values, "dynamic_potential", false);
     config.floquet_potential = boolean_value(config.raw_values, "floquet_potential", false);
     config.floquet_omega = double_value(config.raw_values, "floquet_omega", 0.0);
+    config.floquet_phase = double_value(config.raw_values, "floquet_phase", 0.0);
     config.floquet_amplitude = double_value(config.raw_values, "floquet_amplitude", 1.0);
 
     config.dynamic_correlation_time =

@@ -96,9 +96,11 @@ def add_derived_columns(row: dict) -> dict:
 
 
 # Scan-wide parameters added to every row, so that datasets can be combined
-# and plotted along them. A scan without walls has wall height 0.
+# and plotted along them. A scan without walls has wall height 0. 5.0 scans
+# fill "inverted" (1 or 0) and leave phase_radians blank; 4.0 scans fill
+# phase_radians (the lattice's position phase) and leave "inverted" blank.
 DATASET_COLUMNS = (
-    "lattice_depth_v0_er", "initial_lattice_depth_v0_er", "phase_radians",
+    "lattice_depth_v0_er", "initial_lattice_depth_v0_er", "phase_radians", "inverted",
     "green_wall_height_er", "green_wall_sigma_um", "green_wall_gap_um",
 )
 # Inputs that can be held fixed when several rows share one plotted point.
@@ -135,7 +137,9 @@ def grid_parameter_label(grid: dict) -> str:
         grid.get("initial_lattice_depth_v0_er", 2.0 * lattice_depth)
     )
     phase = float(grid.get("phase_radians", 0.0))
-    return phase_dataset_label(lattice_depth, initial_depth, phase, grid.get("green_walls"))
+    inverted = bool(grid["inverted"]) if "inverted" in grid else None
+    return phase_dataset_label(lattice_depth, initial_depth, phase, grid.get("green_walls"),
+                               inverted=inverted)
 
 
 def automatic_plot_title(grid: dict) -> str:
@@ -143,10 +147,13 @@ def automatic_plot_title(grid: dict) -> str:
     initial_depth = float(
         grid.get("initial_lattice_depth_v0_er", 2.0 * lattice_depth)
     )
-    phase = float(grid.get("phase_radians", 0.0))
+    if "inverted" in grid:
+        start = "Inverted" if grid["inverted"] else "Non-inverted"
+    else:
+        start = f"Phase {float(grid.get('phase_radians', 0.0)):g} rad"
     title = (
         f"Lattice Depth {lattice_depth:g} E_R * "
-        f"Initial Depth {initial_depth:g} E_R * Phase {phase:g} rad"
+        f"Initial Depth {initial_depth:g} E_R * {start}"
     )
     walls = grid.get("green_walls")
     if walls:
@@ -161,7 +168,8 @@ def dataset_columns(grid: dict) -> dict:
     return {
         "lattice_depth_v0_er": depth,
         "initial_lattice_depth_v0_er": float(grid.get("initial_lattice_depth_v0_er", 2.0 * depth)),
-        "phase_radians": float(grid.get("phase_radians", 0.0)),
+        "phase_radians": None if "inverted" in grid else float(grid.get("phase_radians", 0.0)),
+        "inverted": (1.0 if grid["inverted"] else 0.0) if "inverted" in grid else None,
         "green_wall_height_er": float(walls["height_er"]) if walls else 0.0,
         "green_wall_sigma_um": float(walls["sigma_um"]) if walls else None,
         "green_wall_gap_um": float(walls["gap_um"]) if walls else None,

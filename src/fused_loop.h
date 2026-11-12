@@ -15,19 +15,28 @@
 #include <vector>
 
 // Floquet factors in the original sequence: iteration n uses
-// cos(omega * t_n), where t_n is time_step accumulated n times.
+// cos(omega * t_n + phase), where t_n is time_step accumulated n times.
+// Each system has its own phase; none given means 0 for all, which is the
+// original cos(omega * t_n) bit for bit.
 class FloquetClock {
 public:
-    FloquetClock(std::vector<double> omegas, double time_step)
+    FloquetClock(std::vector<double> omegas, double time_step,
+                 std::vector<double> phases = {})
         : omegas_(std::move(omegas)),
+          phases_(phases.empty() ? std::vector<double>(omegas_.size(), 0.0)
+                                 : std::move(phases)),
           time_step_(time_step),
           previous_(omegas_.size(), 0.0),
-          current_(omegas_.size(), 0.0) {}
+          current_(omegas_.size(), 0.0) {
+        if (phases_.size() != omegas_.size()) {
+            throw std::invalid_argument("FloquetClock needs one phase per system.");
+        }
+    }
 
     void advance() {
         previous_ = current_;
         for (std::size_t system = 0; system < omegas_.size(); ++system) {
-            current_[system] = std::cos(omegas_[system] * total_time_);
+            current_[system] = std::cos(omegas_[system] * total_time_ + phases_[system]);
         }
         total_time_ += time_step_;
     }
@@ -37,6 +46,7 @@ public:
 
 private:
     std::vector<double> omegas_;
+    std::vector<double> phases_;
     double time_step_;
     double total_time_ = 0.0;
     std::vector<double> previous_;

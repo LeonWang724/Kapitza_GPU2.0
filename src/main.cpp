@@ -22,6 +22,7 @@ void print_version_json() {
         << "  \"compact_phase_metric_version\": 1,\n"
         << "  \"phase_statistics_version\": 1,\n"
         << "  \"fused_solver_version\": 1,\n"
+        << "  \"drive_phase_version\": 1,\n"
         << "  \"max_batch_systems\": " << kMaxBatchSystems << ",\n"
         << "  \"port_version\": \"" << GPE_PORT_VERSION << "\",\n"
         << "  \"git_commit\": \"" << GPE_GIT_COMMIT << "\",\n"

@@ -194,10 +194,23 @@ def check_green_walls(height_er, sigma_um, gap_um):
 
 def create_init_state(
     V0, alpha, nu_flo, phi, initial_lattice_depth_v0_er=None,
-    *, output_directory=None, config_path=None, green_walls=None,
+    *, output_directory=None, config_path=None, green_walls=None, drive_phase=None,
 ):
     # green_walls: None (no walls) or {"height_er", "sigma_um", "gap_um"};
     # see green_wall_potential(). The walls are static, not modulated.
+    #
+    # drive_phase=None: the 4.0 model, kept unchanged so validation still
+    #   matches the CPU reference. Lattice -(V0/2)[1 + alpha cos(wt)]
+    #   cos(2 kL x + phi); atoms start in the ground state of
+    #   +V_init cos^2(kL x).
+    # drive_phase=phi_d (5.0, the experiment's scheme): phi must be 0, so the
+    #   lattice stays fixed, and the drive is sin(wt + phi_d), written to the
+    #   config as floquet_phase = phi_d - pi/2. The atoms start in the ground
+    #   state of the lattice at t = 0 at the initial depth,
+    #   -V_init [1 + alpha sin(phi_d)] cos^2(kL x), as they are loaded in the
+    #   experiment. Non-inverted: phi_d = 0; inverted: phi_d = arcsin(-2/alpha).
+    if drive_phase is not None and phi != 0:
+        raise ValueError("The 5.0 drive keeps the lattice fixed; the position phase must be 0.")
     # Parameters
     #V0 = 10.0          # lattice depth in E_R
     q = 0.0           # quasimomentum in units of k_L, should lie in [-1, 1)
@@ -235,8 +248,14 @@ def create_init_state(
     if initial_lattice_depth_v0_er is None:
         initial_lattice_depth_v0_er = 2.0 * V0
 
+    # Coefficient c of the loading lattice c cos^2(kL x), in E_R.
+    if drive_phase is None:
+        loading_lattice_er = initial_lattice_depth_v0_er
+    else:
+        loading_lattice_er = -initial_lattice_depth_v0_er * (1.0 + alpha * math.sin(drive_phase))
+
     psi_x, energies, G_indices, coeffs = bloch_state_1d_plane_wave(
-        V0=initial_lattice_depth_v0_er,
+        V0=loading_lattice_er,
         xarr=x*kL,
         q=q,
         band_index=band_index,
@@ -359,7 +378,11 @@ def create_init_state(
         print(f"floquet_omega: {2.0*np.pi*nu_flo*ts}")
     
     update_config_value(str(config_path or "gpe1d.config"), "floquet_omega", 2.0*np.pi*nu_flo*ts)
-    
+    if drive_phase is not None:
+        # The solver evolves with cos(omega t + floquet_phase) = sin(omega t + drive_phase).
+        update_config_value(str(config_path or "gpe1d.config"), "floquet_phase",
+                            repr(float(drive_phase) - 0.5 * np.pi))
+
     
 if __name__ == "__main__":
     

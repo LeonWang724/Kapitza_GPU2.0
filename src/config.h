@@ -33,6 +33,9 @@ struct ConfigData {
     bool dynamic_potential = false;
     bool floquet_potential = false;
     double floquet_omega = 0.0;
+    // 5.0: the drive is cos(floquet_omega * t + floquet_phase). The default 0
+    // keeps the original cos(floquet_omega * t) bit for bit.
+    double floquet_phase = 0.0;
     double floquet_amplitude = 1.0;
 
     double dynamic_correlation_time = 0.0;
