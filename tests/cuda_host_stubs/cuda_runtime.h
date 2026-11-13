@@ -14,6 +14,7 @@
 __device__ double exp(double value);
 __device__ double cos(double value);
 __device__ double sin(double value);
+__device__ double log(double value);
 #else
 #define __global__
 #define __device__

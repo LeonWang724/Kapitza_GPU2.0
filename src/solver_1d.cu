@@ -141,6 +141,10 @@ namespace {
 SolverResult run_reference_solver_1d(const ConfigData& config,
                                      const SolverOptions& options) {
     validate_1d_config(config);
+    if (!config.extended_metrics_file.empty()) {
+        throw std::runtime_error(
+            "Extended metrics need the fused solver loop; do not pass --reference-loop.");
+    }
     const bool compact = !config.phase_metric_file.empty();
     std::optional<PhaseMetricAccumulator> phase_metric;
     if (compact) {
@@ -308,8 +312,20 @@ SolverResult run_reference_solver_1d(const ConfigData& config,
     return SolverResult{completed_iterations, elapsed};
 }
 
-constexpr int kSumStride =
-    static_cast<int>(kStatusSumCount) + static_cast<int>(kPhaseSumCount);
+// Each system's device sums: status, phase metric, then (6.0) extended.
+int sum_stride(bool extended) {
+    return static_cast<int>(kStatusSumCount) + static_cast<int>(kPhaseSumCount) +
+           (extended ? static_cast<int>(kExtendedSumCount) : 0);
+}
+
+ExtendedSettings extended_settings(const ConfigData& config) {
+    ExtendedSettings settings;
+    settings.lattice_wavevector = config.extended_metrics_lattice_wavevector;
+    settings.central_halfwidth = config.extended_metrics_central_halfwidth;
+    settings.site_offset = config.extended_metrics_site_offset;
+    settings.pixel_width = config.extended_metrics_pixel_width;
+    return settings;
+}
 
 // GPU state for the fused loop over one or more compatible configs. Each
 // device array holds the systems' fields back to back.
@@ -322,6 +338,8 @@ public:
           points_(configs.front().points_x),
           total_(static_cast<std::size_t>(points_) * configs.size()),
           compact_(!configs.front().phase_metric_file.empty()),
+          extended_(!configs.front().extended_metrics_file.empty()),
+          sum_stride_(sum_stride(extended_)),
           clock_(omegas(configs), configs.front().time_step, phases(configs)),
           psi_(total_),
           psi_half_(total_),
@@ -332,8 +350,8 @@ public:
           factor_cache_(shape_.beta == 0.0 ? total_ : 0),
           k_propagator_(points_),
           k_squared_(points_),
-          sums_(static_cast<std::size_t>(systems_) * kSumStride),
-          host_sums_(static_cast<std::size_t>(systems_) * kSumStride, 0.0),
+          sums_(static_cast<std::size_t>(systems_) * sum_stride_),
+          host_sums_(static_cast<std::size_t>(systems_) * sum_stride_, 0.0),
           fft_plan_(points_, systems_) {
         constants_.time_step = shape_.time_step;
         constants_.beta = shape_.beta;
@@ -362,8 +380,15 @@ public:
         for (int system = 0; system < systems_; ++system) {
             const ConfigData& config = configs_[system];
             diagnostics_.push_back(std::make_unique<Diagnostics1D>(
-                points_, shape_.step_x, shape_.beta));
+                points_, shape_.step_x, shape_.beta, extended_));
             diagnostics_.back()->capture_initial_density(psi_at(system));
+            if (extended_) {
+                diagnostics_.back()->configure_extended(
+                    extended_settings(config), config.phase_metric_cut_points_each_edge);
+                diagnostics_.back()->capture_initial_state(psi_at(system));
+                extended_writers_.push_back(
+                    std::make_unique<ExtendedWriter>(config.extended_metrics_file));
+            }
             const double initial_norm = diagnostics_.back()->norm(psi_at(system));
             std::cout << prefix(system) << "Norm of initial state: " << initial_norm << '\n';
             if (compact_) {
@@ -430,6 +455,12 @@ public:
             diagnostics_[system]->enqueue_status_sums(
                 psi_at(system), potential_.data() + offset(system), k_squared_.data(),
                 diagnostic_plan(), status_sums_device(system));
+            // 6.0: reuses the density and transform just computed for this psi.
+            if (extended_) {
+                diagnostics_[system]->enqueue_extended_sums(
+                    psi_at(system), static_potential_.data() + offset(system),
+                    k_squared_.data(), extended_sums_device(system));
+            }
         }
         if (sample || stats) download_sums();
 
@@ -476,6 +507,12 @@ public:
                       << " f_flo: " << floquet_factor
                       << " Corr: " << status.initial_density_overlap << '\n';
             status_writers_[system]->append(status);
+            if (extended_) {
+                const double* sums = status_sums_host(system);
+                extended_writers_[system]->append(count, floquet_factor, status.norm,
+                                                  sums[kKineticSum], sums[kOverlapSum],
+                                                  extended_sums_host(system));
+            }
         }
     }
 
@@ -521,16 +558,22 @@ private:
     }
 
     double* status_sums_device(int system) {
-        return sums_.data() + static_cast<std::size_t>(system) * kSumStride;
+        return sums_.data() + static_cast<std::size_t>(system) * sum_stride_;
     }
     double* phase_sums_device(int system) {
         return status_sums_device(system) + kStatusSumCount;
     }
+    double* extended_sums_device(int system) {
+        return phase_sums_device(system) + kPhaseSumCount;
+    }
     const double* status_sums_host(int system) const {
-        return host_sums_.data() + static_cast<std::size_t>(system) * kSumStride;
+        return host_sums_.data() + static_cast<std::size_t>(system) * sum_stride_;
     }
     const double* phase_sums_host(int system) const {
         return status_sums_host(system) + kStatusSumCount;
+    }
+    const double* extended_sums_host(int system) const {
+        return phase_sums_host(system) + kPhaseSumCount;
     }
     void download_sums() {
         CUDA_CHECK(cudaMemcpy(host_sums_.data(), sums_.data(), sums_.bytes(),
@@ -543,6 +586,8 @@ private:
     int points_;
     std::size_t total_;
     bool compact_;
+    bool extended_;
+    int sum_stride_;
     split_step::StepConstants constants_;
     FloquetClock clock_;
     SystemFactors previous_factors_{};
@@ -565,6 +610,7 @@ private:
     std::vector<std::unique_ptr<Diagnostics1D>> diagnostics_;
     std::vector<PhaseMetricAccumulator> metrics_;
     std::vector<std::unique_ptr<StatusWriter>> status_writers_;
+    std::vector<std::unique_ptr<ExtendedWriter>> extended_writers_;
 };
 
 }  // namespace

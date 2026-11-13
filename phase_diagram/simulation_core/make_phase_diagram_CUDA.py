@@ -23,6 +23,7 @@ import tables as tb
 
 from create_initial_state_function import GRID_SPACING_M
 from cuda_workflow_common import RESULTS_DIRECTORY, phase_dataset_label, read_config
+from extended_fields import FIELD_TITLES as EXTENDED_TITLES
 from level_statistics import R2_GOE, R2_POISSON, R_GOE, R_POISSON
 from phase_metric import (
     LEVEL_STATISTICS_FIELDS, STATISTICS_FIELDS, csv_fields, csv_row, level_statistics_columns,
@@ -70,6 +71,8 @@ COLUMN_TITLES = {
     "green_wall_sigma_um": r"Green wall $\sigma$ ($\mu$m)",
     "green_wall_gap_um": r"Green wall gap ($\mu$m)",
 }
+# 6.0 extended metrics (extended_fields.py).
+COLUMN_TITLES.update(EXTENDED_TITLES)
 # The lab's standard deviation of |psi|^2 is the cloud width sigma_x; the CSV
 # stores it in solver length units, which are the generator's 23 nm grid spacing.
 # eta without the absolute value: unbiased at the Poisson end, and negative

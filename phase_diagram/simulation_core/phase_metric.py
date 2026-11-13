@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+from extended_fields import EXTENDED_FIELDS, extended_columns
 from level_statistics import COLUMNS as LEVEL_STATISTICS_FIELDS
 
 METRIC_NAME = "mean_discrete_sum_abs_psi_fourth_power"
@@ -50,8 +51,10 @@ def statistics_columns(summary: dict, *, required: bool = False) -> dict:
 
 
 def csv_fields(contract: dict) -> tuple[str, ...]:
-    """CSV columns; level statistics are appended only when the run computed them."""
-    return CSV_FIELDS + (LEVEL_STATISTICS_FIELDS if contract.get("level_statistics") else ())
+    """CSV columns; level statistics and (6.0) extended metrics are appended
+    only when the run computed them."""
+    return (CSV_FIELDS + (LEVEL_STATISTICS_FIELDS if contract.get("level_statistics") else ())
+            + (EXTENDED_FIELDS if contract.get("extended_metrics") else ()))
 
 
 def level_statistics_columns(record: dict) -> dict:
@@ -79,6 +82,8 @@ def csv_row(record: dict, summary: dict, config: dict, contract: dict) -> dict:
     }
     if contract.get("level_statistics"):
         row.update(level_statistics_columns(record))
+    if contract.get("extended_metrics"):
+        row.update(extended_columns(record))
     return row
 
 

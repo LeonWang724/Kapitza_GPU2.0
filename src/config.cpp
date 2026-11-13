@@ -1,8 +1,10 @@
 // Codex CUDA Port: parser preserving the original key=value configuration interface.
 #include "config.h"
+#include "extended_metrics.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <limits>
 #include <set>
@@ -142,6 +144,15 @@ ConfigData read_config(const std::filesystem::path& config_path) {
         int_value(config.raw_values, "phase_metric_final_snapshot_count", 30);
     config.phase_metric_cut_points_each_edge =
         int_value(config.raw_values, "phase_metric_cut_points_each_edge", 100);
+    config.extended_metrics_file = path_value(config.raw_values, "extended_metrics_file");
+    config.extended_metrics_lattice_wavevector =
+        double_value(config.raw_values, "extended_metrics_lattice_wavevector", 0.0);
+    config.extended_metrics_central_halfwidth =
+        double_value(config.raw_values, "extended_metrics_central_halfwidth", 0.0);
+    config.extended_metrics_site_offset =
+        double_value(config.raw_values, "extended_metrics_site_offset", 0.0);
+    config.extended_metrics_pixel_width =
+        double_value(config.raw_values, "extended_metrics_pixel_width", 0.0);
     return config;
 }
 
@@ -182,6 +193,18 @@ void validate_1d_config(const ConfigData& config) {
     if (config.floquet_potential && config.floquet_potential_file.empty()) {
         throw std::runtime_error(
             "floquet_potential_file is required when floquet_potential=true.");
+    }
+    if (!config.extended_metrics_file.empty()) {
+        if (config.imaginary_time) {
+            throw std::runtime_error("Extended metrics require real-time evolution.");
+        }
+        if (!(config.extended_metrics_lattice_wavevector > 0.0) ||
+            !(config.extended_metrics_central_halfwidth > 0.0) ||
+            !(config.extended_metrics_pixel_width > config.step_x) ||
+            !std::isfinite(config.extended_metrics_site_offset) ||
+            !(kExtendedPi / config.extended_metrics_lattice_wavevector > config.step_x)) {
+            throw std::runtime_error("Invalid extended-metric wavevector, window or pixel.");
+        }
     }
 }
 
@@ -224,6 +247,18 @@ void validate_batch_compatible(const std::vector<ConfigData>& configs) {
         require(config.phase_metric_cut_points_each_edge ==
                     first.phase_metric_cut_points_each_edge,
                 "phase_metric_cut_points_each_edge");
+        require(config.extended_metrics_file.empty() == first.extended_metrics_file.empty(),
+                "extended_metrics_file (on or off)");
+        require(config.extended_metrics_lattice_wavevector ==
+                    first.extended_metrics_lattice_wavevector,
+                "extended_metrics_lattice_wavevector");
+        require(config.extended_metrics_central_halfwidth ==
+                    first.extended_metrics_central_halfwidth,
+                "extended_metrics_central_halfwidth");
+        require(config.extended_metrics_site_offset == first.extended_metrics_site_offset,
+                "extended_metrics_site_offset");
+        require(config.extended_metrics_pixel_width == first.extended_metrics_pixel_width,
+                "extended_metrics_pixel_width");
 
         // Every system writes its own results.
         const auto unique = [&](std::set<std::string>& seen,

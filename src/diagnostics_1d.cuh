@@ -2,6 +2,7 @@
 #pragma once
 
 #include "device_buffer.cuh"
+#include "extended_metrics.h"
 #include "reductions.cuh"
 #include "phase_statistics.h"
 
@@ -18,7 +19,8 @@ struct EnergyValues {
 
 class Diagnostics1D {
 public:
-    Diagnostics1D(int points, double step_x, double beta);
+    // extended: also keep psi at t = 0 and the bins for the 6.0 extended sums.
+    Diagnostics1D(int points, double step_x, double beta, bool extended = false);
 
     double norm(const cuDoubleComplex* psi);
     EnergyValues energy(const cuDoubleComplex* psi,
@@ -41,10 +43,28 @@ public:
     // Centered second pass over the density of the last enqueued psi.
     void enqueue_variance_sum(int cut, double mean_x, double* device_sums);
 
+    // 6.0 extended metrics (constructed with extended = true).
+    void configure_extended(const ExtendedSettings& settings, int cut);
+    void capture_initial_state(const cuDoubleComplex* psi);
+    // The sums of extended_metrics.h, at the indices of ExtendedSum. Must run
+    // right after enqueue_status_sums() on the same psi, whose density and
+    // transform it reuses.
+    void enqueue_extended_sums(const cuDoubleComplex* psi,
+                               const cuDoubleComplex* static_potential,
+                               const double* k_squared, double* device_sums);
+
 private:
     int points_;
     double step_x_;
     double beta_;
+    bool extended_;
+    ExtendedSettings extended_settings_{};
+    int extended_cut_ = 0;
+    int site_bins_ = 0;
+    int pixel_bins_ = 0;
+    DeviceBuffer<cuDoubleComplex> initial_psi_;
+    DeviceBuffer<int> site_starts_;
+    DeviceBuffer<int> pixel_starts_;
     GpuReducer reducer_;
     DeviceBuffer<double> density_;
     DeviceBuffer<double> initial_density_;

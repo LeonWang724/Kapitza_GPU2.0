@@ -51,6 +51,9 @@ def run_compact_sweep(
     batch_size = int(solver.get("points_per_batch", 1))
     extra_arguments = [str(argument) for argument in solver.get("extra_arguments", [])]
     level_settings = contract.get("level_statistics")
+    extended = contract.get("extended_metrics")
+    if extended:
+        import extended_metrics
     manifest["simulation_config"] = read_config(base_config)
     expected_sampling(manifest["simulation_config"], contract)
     provenance = results_root / "provenance"
@@ -118,6 +121,11 @@ def run_compact_sweep(
                             "phase_metric_cut_points_each_edge": contract["cut_points_each_edge"],
                             "save_psi": "false", "dp_save_potential": "false",
                         })
+                        if extended:  # 6.0: the solver records the extended sums
+                            update_config(config_path, {
+                                **extended_metrics.solver_settings(grid, alpha),
+                                "extended_metrics_file": point_work / "extended.csv",
+                            })
                         generated = read_config(config_path)
                         record["floquet_omega_dimensionless"] = float(generated["floquet_omega"])
                         drive_phase = point_drive_phase(grid, alpha)
@@ -135,6 +143,25 @@ def run_compact_sweep(
                             failing_index = record["run_index"]
                             record["level_statistics"] = level_statistics_task(
                                 (grid["lattice_depth_v0_er"], alpha, frequency, level_settings))
+                    if extended:
+                        # 6.0: the q = 0 Floquet model and the classical ensemble
+                        # need only the parameters; same thread, as above.
+                        hold, window = extended_metrics.run_timing(points[0][2], contract)
+                        depth = float(grid["lattice_depth_v0_er"])
+                        initial = float(grid["initial_lattice_depth_v0_er"])
+                        parameters = [(alpha, frequency, point_drive_phase(grid, alpha))
+                                      for (_, _, _, alpha, frequency) in batch]
+                        classical = extended_metrics.classical_metrics(
+                            parameters, depth, initial, hold, window)
+                        for record, (alpha, frequency, phase), columns in zip(
+                                records, parameters, classical):
+                            failing_index = record["run_index"]
+                            record["extended_metrics"] = {
+                                **extended_metrics.empty_columns(),
+                                **extended_metrics.floquet_q0_metrics(
+                                    depth, initial, alpha, frequency, phase, hold, window),
+                                **columns,
+                            }
                     failing_index = batch[0][0]
                     if len(batch) > 1:
                         print(f"\nSimulating points {batch[0][0]:03d}-{batch[-1][0]:03d} "
@@ -158,6 +185,9 @@ def run_compact_sweep(
                         summary = json.loads(summary_path.read_text(encoding="utf-8"))
                         value, _ = validate_summary(summary, generated, contract)
                         record["metric_summary"] = summary
+                        if extended:
+                            record["extended_metrics"].update(extended_metrics.gpu_summary(
+                                summary_path.parent / "extended.csv", generated, contract))
                         values.append(value)
                     for record, (_, _, generated) in zip(records, points):
                         record["status"] = "completed"

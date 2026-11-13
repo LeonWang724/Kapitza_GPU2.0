@@ -66,6 +66,15 @@ CalculateLevelStatistics = False
 LevelStatisticsQuasimomentum = 0.0     # q in units of kL; 0 is the BEC's (parity sectors split)
 LevelStatisticsPlaneWaveCutoff = 40    # plane waves |n| <= n_max, i.e. 2 n_max + 1 levels
 
+# 6.0 extended metrics: True adds every metric of extended_fields.py to
+# metrics.csv, from three sources: the GPU simulation (pendulum angle <cos 2kL x>,
+# on-site spread, growth rates, momentum orders, return probability, site IPR,
+# entropy, kurtosis, ...), a q = 0 Floquet model (band populations, Floquet
+# participation, slow frequency, echo, ...) and a classical ensemble. It also
+# turns on the level statistics above. Needs compact storage, the fused loop
+# and a 6.0 build; the CPU adds roughly 0.1-0.3 s per point.
+ExtendedMetrics = False
+
 # Number of simultaneous terminal tabs sharing this grid. Any positive integer
 # works; leftover points are distributed one each to the first tabs.
 # 1 runs here. Values greater than 1 open Windows Terminal tabs (or windows).
@@ -91,6 +100,13 @@ def green_wall_settings() -> tuple[dict | None, float | None]:
     checked = check_green_walls(GreenWallHeight_ER, GreenWallSigma_um, GreenWallGap_um)
     fraction = checked.pop("initial_fraction_between_walls")
     return checked, fraction
+
+
+def extended_settings() -> dict | None:
+    if not ExtendedMetrics:
+        return None
+    from extended_metrics import contract_settings
+    return contract_settings()
 
 
 def unique_results_directory(green_walls: dict | None) -> Path:
@@ -138,9 +154,11 @@ def main() -> int:
         green_walls, fraction_between = green_wall_settings()
         if not isinstance(CalculateLevelStatistics, bool):
             raise ValueError("CalculateLevelStatistics must be True or False.")
+        if not isinstance(ExtendedMetrics, bool):
+            raise ValueError("ExtendedMetrics must be True or False.")
         level_statistics = (level_statistics_settings(LevelStatisticsQuasimomentum,
                                                       LevelStatisticsPlaneWaveCutoff)
-                            if CalculateLevelStatistics else None)
+                            if CalculateLevelStatistics or ExtendedMetrics else None)
         # Checks INVERTED and, when inverted, that every alpha >= 2.
         drive_phases = [experiment_drive_phase(alpha, INVERTED) for alpha in ALPHA_VALUES]
     except ValueError as error:
@@ -165,6 +183,14 @@ def main() -> int:
             print("Note: the walls overlap the initial cloud.")
     else:
         print("Green walls: off")
+    if ExtendedMetrics:
+        if arguments.storage != "compact" or arguments.reference_loop:
+            parser.error("ExtendedMetrics needs compact storage and the fused loop "
+                         "(no --storage full, no --reference-loop).")
+        print("Extended metrics: on (GPU, q = 0 Floquet model and classical ensemble "
+              "columns; level statistics on).")
+    else:
+        print("Extended metrics: off")
     if level_statistics:
         print(f"Level statistics: <r>, <r^2>, eta and eta_r_squared of the Floquet quasienergies "
               f"at q = {level_statistics['quasimomentum']:g} kL with plane waves "
@@ -202,6 +228,11 @@ def main() -> int:
         raise RuntimeError(
             "This executable predates the 5.0 drive phase. Run BUILD_CUDA.bat, then "
             "VALIDATE_FAST_CUDA.bat, before starting the scan."
+        )
+    if ExtendedMetrics and build_info.get("extended_metrics_version") != 1:
+        raise RuntimeError(
+            "This executable predates the 6.0 extended metrics. Run BUILD_CUDA.bat, then "
+            "VALIDATE_EXTENDED_CUDA.bat, before starting the scan."
         )
     # Sleeping instead of spinning while waiting for the GPU leaves CPU power
     # and thermal headroom to the GPU, especially with several tabs.
@@ -271,6 +302,8 @@ def main() -> int:
             "metric": "mean_discrete_sum_abs_psi_fourth_power",
             # None, or the Floquet level-statistics settings and references.
             "level_statistics": level_statistics,
+            # None, or the 6.0 extended-metric settings (extended_metrics.py).
+            "extended_metrics": extended_settings(),
             "normalization": "none",
             "frequency_axis_inverted": True,
             "colormap": "inferno",

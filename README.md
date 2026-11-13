@@ -1,4 +1,45 @@
-# Kapitza_GPU5.0
+# Kapitza_GPU6.0
+
+Version 6.0 adds **extended metrics**: one switch in
+`phase_diagram/simulation_core/run_phase_diagram_CUDA.py`,
+
+```python
+ExtendedMetrics = True
+```
+
+adds 43 columns to `metrics.csv` (and to MAKE's analysis CSV) and turns on the
+level statistics. Everything else is the 5.0 model: fixed lattice, drive
+sin(omega t + phi), `INVERTED`. With `ExtendedMetrics = False` a run is
+identical to 5.0. The meaning of every column is in
+`phase_diagram/simulation_core/extended_fields.py`.
+
+| Source | Columns | What |
+| --- | --- | --- |
+| GPU simulation (no prefix) | 25 | Sums the solver records every status step (every 100 steps): pendulum angle `pendulum_cos` = <cos 2kL x> (+1 bottom, -1 top), on-site spread, stroboscopic versions, early growth rates of the width and of <p^2>, spreading speed, central fraction, escape fraction, density and site entropy, kurtosis, site IPR and occupied sites, 4 um coarse IPR, return probability, density overlap, <p^2>, the p = 0 and +-2 hbar kL orders, absorbed energy, starting width and IPR |
+| q = 0 Floquet model (`q0_`) | 15 | The same Hamiltonian for one site's Bloch state, once per drive period: pendulum angle, on-site spread, <p^2>, orders, absorbed energy, on-site survival, band populations, Floquet participation, slow frequency, echo fidelity |
+| Classical ensemble (`cl_`) | 3 | Point particles in the same lattice: pendulum angle, fraction near the start, fraction that left its site |
+
+The GPU columns use the same final window as the IPR (the last 30 samples).
+Display choices (Mathieu axes, threshold and edge maps, log scales, smoothing,
+difference maps) are made when plotting, from these columns.
+
+Extended metrics need compact storage, the fused loop and a 6.0 build; the
+runner refuses anything else. Build and validate on the Windows machine:
+
+```powershell
+.\BUILD_CUDA.bat
+.\VALIDATE_FAST_CUDA.bat
+.\VALIDATE_COMPACT_CUDA.bat
+.\VALIDATE_EXTENDED_CUDA.bat
+```
+
+`VALIDATE_EXTENDED_CUDA.bat` runs a non-inverted and an inverted point as one
+GPU batch with snapshots and checks every extended sum against NumPy. Cost: the
+GPU does about 20 extra reductions every 100 steps; the CPU adds about 0.1-0.3 s
+per point for the q = 0 model, a few seconds per batch for the classical
+ensemble, and the level statistics.
+
+## Version 5.0
 
 Version 5.0 drives and loads the lattice **as in the experiment**. The lattice
 stays fixed and the drive is a sine with a phase:

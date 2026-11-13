@@ -55,6 +55,14 @@ struct ConfigData {
     int phase_metric_final_snapshot_count = 30;
     int phase_metric_cut_points_each_edge = 100;
 
+    // 6.0: a nonempty path writes the extended metrics of extended_metrics.h at
+    // every status iteration (fused loop only). Lengths in solver units.
+    std::filesystem::path extended_metrics_file;
+    double extended_metrics_lattice_wavevector = 0.0;
+    double extended_metrics_central_halfwidth = 0.0;
+    double extended_metrics_site_offset = 0.0;
+    double extended_metrics_pixel_width = 0.0;
+
     std::unordered_map<std::string, std::string> raw_values;
 };
 

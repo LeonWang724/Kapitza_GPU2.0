@@ -3,15 +3,19 @@
 
 #include "cuda_checks.cuh"
 #include "diagnostic_sums.h"
+#include "extended_kernels_1d.cuh"
 #include "kernels_1d.cuh"
 
 #include <stdexcept>
 #include <cmath>
+#include <vector>
 
-Diagnostics1D::Diagnostics1D(int points, double step_x, double beta)
+Diagnostics1D::Diagnostics1D(int points, double step_x, double beta, bool extended)
     : points_(points),
       step_x_(step_x),
       beta_(beta),
+      extended_(extended),
+      initial_psi_(extended ? static_cast<std::size_t>(points) : 0),
       reducer_(points),
       density_(points),
       initial_density_(points),
@@ -146,4 +150,92 @@ void Diagnostics1D::enqueue_variance_sum(int cut, double mean_x,
     launch_spatial_variance_terms(density_.data(), terms_a_.data(), points_,
                                  step_x_, mean_x);
     reducer_.sum_into(terms_a_.data() + cut, count, device_sums + kVarianceSum);
+}
+
+namespace {
+
+void upload_starts(const std::vector<int>& starts, DeviceBuffer<int>& device, int& bins) {
+    device.allocate(starts.size());
+    CUDA_CHECK(cudaMemcpy(device.data(), starts.data(), starts.size() * sizeof(int),
+                          cudaMemcpyHostToDevice));
+    bins = static_cast<int>(starts.size()) - 1;
+}
+
+}  // namespace
+
+void Diagnostics1D::configure_extended(const ExtendedSettings& settings, int cut) {
+    if (!extended_) throw std::runtime_error("Extended metrics were not enabled.");
+    if (cut < 0 || cut > (points_ - 1) / 2) {
+        throw std::runtime_error("Spatial cut removes all metric points.");
+    }
+    if (!(settings.lattice_wavevector > 0.0) || !(settings.central_halfwidth > 0.0)) {
+        throw std::runtime_error("Extended metrics need a positive wavevector and window.");
+    }
+    extended_settings_ = settings;
+    extended_cut_ = cut;
+    const double period = kExtendedPi / settings.lattice_wavevector;
+    upload_starts(bin_starts(points_, cut, step_x_, period, settings.site_offset),
+                  site_starts_, site_bins_);
+    upload_starts(bin_starts(points_, cut, step_x_, settings.pixel_width,
+                             -0.5 * settings.pixel_width),
+                  pixel_starts_, pixel_bins_);
+}
+
+void Diagnostics1D::capture_initial_state(const cuDoubleComplex* psi) {
+    if (!extended_) throw std::runtime_error("Extended metrics were not enabled.");
+    launch_copy_complex(psi, initial_psi_.data(), points_);
+}
+
+void Diagnostics1D::enqueue_extended_sums(const cuDoubleComplex* psi,
+                                          const cuDoubleComplex* static_potential,
+                                          const double* k_squared, double* device_sums) {
+    if (!extended_ || site_bins_ <= 0 || pixel_bins_ <= 0) {
+        throw std::runtime_error("Extended metrics were not configured.");
+    }
+    const int cut = extended_cut_;
+    const int count = points_ - 2 * cut;
+    const auto weighted = [&](DensityWeight weight, double parameter, int index) {
+        launch_density_weight_terms(density_.data(), static_potential, terms_a_.data(),
+                                    points_, step_x_, weight, parameter);
+        reducer_.sum_into(terms_a_.data() + cut, count, device_sums + index);
+    };
+    // density_ and diagnostic_fft_ hold |psi|^2 and the transform of psi from
+    // enqueue_status_sums(); nothing below overwrites them.
+    reducer_.sum_into(density_.data() + cut, count, device_sums + kExtMass);
+    const double two_k = 2.0 * extended_settings_.lattice_wavevector;
+    weighted(DensityWeight::Cos, two_k, kExtCos);
+    weighted(DensityWeight::Sin, two_k, kExtSin);
+    weighted(DensityWeight::X1, 0.0, kExtX1);
+    weighted(DensityWeight::X2, 0.0, kExtX2);
+    weighted(DensityWeight::X3, 0.0, kExtX3);
+    weighted(DensityWeight::X4, 0.0, kExtX4);
+    weighted(DensityWeight::Central, extended_settings_.central_halfwidth, kExtCentral);
+    weighted(DensityWeight::DensityLogDensity, 0.0, kExtDensityLogDensity);
+    weighted(DensityWeight::Potential, 0.0, kExtPotential);
+    launch_overlap_terms(density_.data(), density_.data(), terms_a_.data(), points_);
+    reducer_.sum_into(terms_a_.data() + cut, count, device_sums + kExtDensitySquared);
+
+    launch_bin_mass_terms(density_.data(), site_starts_.data(), site_bins_,
+                          terms_a_.data(), terms_b_.data());
+    reducer_.sum_into(terms_a_.data(), site_bins_, device_sums + kExtSiteSquared);
+    reducer_.sum_into(terms_b_.data(), site_bins_, device_sums + kExtSiteLog);
+    launch_bin_mass_terms(density_.data(), pixel_starts_.data(), pixel_bins_,
+                          terms_a_.data(), terms_b_.data());
+    reducer_.sum_into(terms_a_.data(), pixel_bins_, device_sums + kExtPixelSquared);
+
+    launch_return_overlap_terms(initial_psi_.data(), psi, terms_a_.data(), terms_b_.data(),
+                                points_);
+    reducer_.sum_into(terms_a_.data(), points_, device_sums + kExtReturnReal);
+    reducer_.sum_into(terms_b_.data(), points_, device_sums + kExtReturnImag);
+
+    launch_density(diagnostic_fft_.data(), terms_a_.data(), points_);
+    reducer_.sum_into(terms_a_.data(), points_, device_sums + kExtMomentumTotal);
+    const double kl2 = extended_settings_.lattice_wavevector *
+                       extended_settings_.lattice_wavevector;
+    launch_momentum_zone_terms(diagnostic_fft_.data(), k_squared, terms_a_.data(), points_,
+                               0.0, kl2);
+    reducer_.sum_into(terms_a_.data(), points_, device_sums + kExtMomentumZero);
+    launch_momentum_zone_terms(diagnostic_fft_.data(), k_squared, terms_a_.data(), points_,
+                               kl2, 9.0 * kl2);
+    reducer_.sum_into(terms_a_.data(), points_, device_sums + kExtMomentumSecond);
 }

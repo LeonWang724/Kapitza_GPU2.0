@@ -37,6 +37,7 @@ from pathlib import Path
 if "--version-json" in sys.argv:
     print(json.dumps({"compact_phase_metric_version": 1, "phase_statistics_version": 1,
                       "fused_solver_version": 1, "drive_phase_version": 1,
+                      "extended_metrics_version": 1,
                       "max_batch_systems": 64})); raise SystemExit(0)
 if "--device-info" in sys.argv:
     print(json.dumps({"device_index": 0, "name": "Test solver"})); raise SystemExit(0)
@@ -79,6 +80,33 @@ def solve(config):
                 handle.create_array("/", "REAL", state)
                 handle.create_array("/", "IMAGINARY", np.zeros(points))
     Path(config["status_file"]).write_text("status\\n")
+    if config.get("extended_metrics_file"):
+        # 6.0: the exact NumPy sums of the starting state at every status step.
+        import numpy as np, tables as tb
+        sys.path.insert(0, os.environ["KAPITZA_CORE"])
+        from extended_metrics import SERIES_COLUMNS, reference_extended_sums
+        def load(path):
+            with tb.open_file(path) as handle:
+                return handle.root.REAL[:] + 1j * handle.root.IMAGINARY[:]
+        psi, potential = load(config["initial_state_file"]), load(config["potential_file"])
+        step = float(config["step_x"])
+        sums = reference_extended_sums(
+            psi, psi, potential, cut=int(config["phase_metric_cut_points_each_edge"]),
+            step_x=step,
+            lattice_wavevector=float(config["extended_metrics_lattice_wavevector"]),
+            central_halfwidth=float(config["extended_metrics_central_halfwidth"]),
+            site_offset=float(config["extended_metrics_site_offset"]),
+            pixel_width=float(config["extended_metrics_pixel_width"]))
+        density = np.abs(psi) ** 2
+        fft = np.fft.fft(psi)
+        k2 = (2 * math.pi * np.fft.fftfreq(psi.size, d=step)) ** 2
+        fixed = [step * density.sum(), np.sum(k2 * np.abs(fft) ** 2), np.sum(density ** 2)]
+        every = int(float(config.get("show_stats_every_nth_iteration", stride)))
+        with open(config["extended_metrics_file"], "w") as out:
+            out.write(";".join(SERIES_COLUMNS) + "\\n")
+            for iteration in range(0, iterations, every):
+                values = [iteration, 1.0, *fixed, *sums]
+                out.write(";".join(repr(float(value)) for value in values) + "\\n")
 
 # Like gpe1d_cuda.exe, every argument before the first option is a config;
 # several configs form one GPU batch.
