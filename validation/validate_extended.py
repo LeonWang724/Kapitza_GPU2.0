@@ -1,10 +1,14 @@
 """Check the 6.0 extended-metric sums of this GPU against NumPy.
 
-Two short points (non-inverted and inverted, the 5.0 drive) run together as
-one GPU batch with full snapshots. At every status iteration the solver's
-extended sums must match an independent NumPy calculation on the saved
-snapshot (extended_metrics.reference_extended_sums), to --rtol of each
-column's largest value. Then the CSV summary is computed from each file.
+Two GPU batches of two short points each, with full snapshots: one batch
+non-inverted and one inverted (the 5.0 drive). Points of different loading
+cannot share a batch, because the lattice-site edges sit where the atoms
+start; a scan never mixes them either. At every status iteration the
+solver's extended sums must match an independent NumPy calculation on the
+saved snapshot (extended_metrics.reference_extended_sums), to --rtol of the
+summed magnitudes of each column's terms: the scale of the rounding error,
+which stays finite where a sum cancels to zero (odd moments of the
+symmetric cloud). Then the CSV summary is computed from each file.
 """
 
 from __future__ import annotations
@@ -30,8 +34,13 @@ from cuda_workflow_common import (  # noqa: E402
 )
 import extended_metrics  # noqa: E402
 
-POINTS = ({"name": "non_inverted", "alpha": 4.0, "frequency_hz": 1.9e6, "inverted": False},
-          {"name": "inverted", "alpha": 30.0, "frequency_hz": 1.3e6, "inverted": True})
+# One GPU batch per loading; every point of a batch shares the site offset.
+BATCHES = {
+    "non_inverted": ({"alpha": 4.0, "frequency_hz": 1.9e6},
+                     {"alpha": 12.0, "frequency_hz": 0.8e6}),
+    "inverted": ({"alpha": 30.0, "frequency_hz": 1.3e6},
+                 {"alpha": 15.0, "frequency_hz": 0.6e6}),
+}
 DEPTH, INITIAL = 10.0, 20.0
 
 
@@ -40,15 +49,20 @@ def load(path: Path) -> np.ndarray:
         return handle.root.REAL[:] + 1j * handle.root.IMAGINARY[:]
 
 
-def prepare(directory: Path, point: dict, iterations: int) -> Path:
+def point_label(loading: str, point: dict) -> str:
+    return (f"{loading} alpha={point['alpha']:g}, "
+            f"f={point['frequency_hz'] / 1e6:g} MHz")
+
+
+def prepare(directory: Path, point: dict, inverted: bool, iterations: int) -> Path:
     directory.mkdir(parents=True)
     config = directory / "run.config"
     shutil.copy2(CORE / "gpe1d.config", config)
-    phase = experiment_drive_phase(point["alpha"], point["inverted"])
+    phase = experiment_drive_phase(point["alpha"], inverted)
     create_init_state(DEPTH, point["alpha"], point["frequency_hz"], 0.0, INITIAL,
                       output_directory=directory / "in", config_path=config, drive_phase=phase)
     (directory / "out").mkdir()
-    grid = {"initial_lattice_depth_v0_er": INITIAL, "inverted": point["inverted"]}
+    grid = {"initial_lattice_depth_v0_er": INITIAL, "inverted": inverted}
     update_config(config, {
         "initial_state_file": directory / "in" / "lattice_gauss.h5",
         "potential_file": directory / "in" / "vstatic.h5",
@@ -65,7 +79,8 @@ def prepare(directory: Path, point: dict, iterations: int) -> Path:
 
 
 def compare(directory: Path, config: dict, rtol: float) -> float:
-    """Largest difference between the solver's sums and NumPy, relative to each column."""
+    """Largest difference between the solver's sums and NumPy, relative to each
+    column's summed term magnitudes."""
     series = extended_metrics.read_series(directory / "extended.csv")
     initial = load(Path(config["initial_state_file"]))
     potential = load(Path(config["potential_file"]))
@@ -77,24 +92,28 @@ def compare(directory: Path, config: dict, rtol: float) -> float:
         site_offset=float(config["extended_metrics_site_offset"]),
         pixel_width=float(config["extended_metrics_pixel_width"]))
     names = extended_metrics.SERIES_COLUMNS[2:]
-    gpu, reference = [], []
+    gpu, reference, magnitude = [], [], []
     for row, iteration in enumerate(series["iteration"].astype(int)):
         psi = load(directory / "out" / f"{iteration:016d}.h5")
         density = np.abs(psi) ** 2
         fft = np.fft.fft(psi)
         k2 = (2.0 * math.pi * np.fft.fftfreq(psi.size, d=step)) ** 2
+        # Norm, kinetic sum and density overlap: every term is non-negative.
         fixed = [step * density.sum(), np.sum(k2 * np.abs(fft) ** 2),
                  np.sum(np.abs(initial) ** 2 * density)]
-        reference.append(np.concatenate(
-            [fixed, extended_metrics.reference_extended_sums(psi, initial, potential, **settings)]))
+        reference.append(np.concatenate([fixed, extended_metrics.reference_extended_sums(
+            psi, initial, potential, **settings)]))
+        magnitude.append(np.concatenate([fixed, extended_metrics.reference_extended_sums(
+            psi, initial, potential, **settings, absolute=True)]))
         gpu.append([series[name][row] for name in names])
     gpu, reference = np.array(gpu), np.array(reference)
-    scale = np.maximum(np.max(np.abs(reference), axis=0), 1e-300)
-    difference = np.max(np.abs(gpu - reference) / scale, axis=0)
-    worst = int(np.argmax(difference))
-    if difference[worst] > rtol:
-        raise AssertionError(f"{directory.name}: {names[worst]} differs from NumPy by "
-                             f"{difference[worst]:.3g} of its largest value.")
+    scale = np.maximum(np.max(np.array(magnitude), axis=0), 1e-300)
+    difference = np.max(np.abs(gpu - reference), axis=0) / scale
+    failing = [f"{name} ({value:.3g})" for name, value in zip(names, difference)
+               if not value <= rtol]
+    if failing:
+        raise AssertionError(f"{directory.name}: differs from NumPy by more than {rtol:g} "
+                             f"of the summed magnitudes in " + ", ".join(failing) + ".")
     return float(difference.max())
 
 
@@ -117,27 +136,32 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix=".check_", dir=results) as temporary:
         work = Path(temporary)
         try:
-            configs = [prepare(work / point["name"], point, arguments.iterations)
-                       for point in POINTS]
-            code = run_logged([str(executable), *map(str, configs), "--device",
-                               str(arguments.device), "--floquet-mode", "physical"],
-                              ROOT, work / "solver.log")
-            if code != 0:
-                raise RuntimeError(f"Solver failed with exit code {code}; see solver.log")
             contract = {"final_snapshot_count": 3, "cut_points_each_edge": 100}
-            for point, path in zip(POINTS, configs):
-                config = read_config(path)
-                worst = compare(path.parent, config, arguments.rtol)
-                summary = extended_metrics.gpu_summary(path.parent / "extended.csv", config,
-                                                       contract)
-                check = {"name": f"{point['name']}: extended sums == NumPy",
-                         "status": "passed", "max_relative_difference": worst,
-                         "pendulum_cos": summary["pendulum_cos"],
-                         "site_ipr": summary["site_ipr"], "order_0": summary["order_0"]}
-                report["checks"].append(check)
-                write_json_atomic(results / "report.json", report)
-                print(f"PASS {check['name']} (max relative difference {worst:.2g}; "
-                      f"pendulum_cos {summary['pendulum_cos']:+.3f})", flush=True)
+            for loading, points in BATCHES.items():
+                inverted = loading == "inverted"
+                configs = [prepare(work / f"{loading}_{index}", point, inverted,
+                                   arguments.iterations)
+                           for index, point in enumerate(points)]
+                log = f"solver_{loading}.log"
+                code = run_logged([str(executable), *map(str, configs), "--device",
+                                   str(arguments.device), "--floquet-mode", "physical"],
+                                  ROOT, work / log)
+                if code != 0:
+                    raise RuntimeError(f"Solver failed on the {loading} batch with exit code "
+                                       f"{code}; see {log}")
+                for point, path in zip(points, configs):
+                    config = read_config(path)
+                    worst = compare(path.parent, config, arguments.rtol)
+                    summary = extended_metrics.gpu_summary(path.parent / "extended.csv",
+                                                           config, contract)
+                    check = {"name": f"{point_label(loading, point)}: extended sums == NumPy",
+                             "status": "passed", "max_relative_difference": worst,
+                             "pendulum_cos": summary["pendulum_cos"],
+                             "site_ipr": summary["site_ipr"], "order_0": summary["order_0"]}
+                    report["checks"].append(check)
+                    write_json_atomic(results / "report.json", report)
+                    print(f"PASS {check['name']} (max relative difference {worst:.2g}; "
+                          f"pendulum_cos {summary['pendulum_cos']:+.3f})", flush=True)
             report["status"] = "passed"
         except Exception as error:
             report["status"] = "failed"

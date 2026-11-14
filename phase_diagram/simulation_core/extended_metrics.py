@@ -109,14 +109,21 @@ def bin_starts(points: int, cut: int, step_x: float, width: float, offset: float
 
 def reference_extended_sums(psi, initial_psi, potential, *, cut: int, step_x: float,
                             lattice_wavevector: float, central_halfwidth: float,
-                            site_offset: float, pixel_width: float) -> np.ndarray:
-    """The solver's raw extended sums for one state, in the order of EXTENDED_SUM_NAMES."""
+                            site_offset: float, pixel_width: float,
+                            absolute: bool = False) -> np.ndarray:
+    """The solver's raw extended sums for one state, in the order of EXTENDED_SUM_NAMES.
+
+    absolute=True sums the magnitudes of the same terms instead: the scale of
+    the rounding error of each sum, which stays finite where the sum itself
+    cancels to zero (odd moments of a symmetric cloud).
+    """
     psi = np.asarray(psi, dtype=complex)
     points = psi.size
     rho = psi.real ** 2 + psi.imag ** 2
     window = slice(cut, points - cut)
     x = (np.arange(points) - points // 2).astype(float) * step_x
     r, xw = rho[window], x[window]
+    keep = np.abs if absolute else (lambda values: values)
     with np.errstate(divide="ignore", invalid="ignore"):
         rho_log = np.where(r > 0.0, r * np.log(np.where(r > 0.0, r, 1.0)), 0.0)
 
@@ -124,22 +131,28 @@ def reference_extended_sums(psi, initial_psi, potential, *, cut: int, step_x: fl
         starts = bin_starts(points, cut, step_x, width, offset)
         mass = np.add.reduceat(rho[:starts[-1]], starts[:-1])
         logs = np.where(mass > 0.0, mass * np.log(np.where(mass > 0.0, mass, 1.0)), 0.0)
-        return float(np.sum(mass ** 2)), float(np.sum(logs))
+        return float(np.sum(mass ** 2)), float(np.sum(keep(logs)))
 
     site_squared, site_log = bins(math.pi / lattice_wavevector, site_offset)
     pixel_squared, _ = bins(pixel_width, -0.5 * pixel_width)
-    overlap = np.sum(np.conj(np.asarray(initial_psi, dtype=complex)) * psi)
+    initial = np.asarray(initial_psi, dtype=complex)
+    if absolute:
+        magnitude = float(np.sum(np.abs(initial) * np.abs(psi)))
+        overlap = complex(magnitude, magnitude)
+    else:
+        overlap = np.sum(np.conj(initial) * psi)
     fft = np.fft.fft(psi)
     power = fft.real ** 2 + fft.imag ** 2
     k2 = (2.0 * math.pi * np.fft.fftfreq(points, d=step_x)) ** 2
     kl2 = lattice_wavevector ** 2
     two_k = 2.0 * lattice_wavevector
     return np.array([
-        np.sum(r), np.sum(r * np.cos(two_k * xw)), np.sum(r * np.sin(two_k * xw)),
-        np.sum(r * xw), np.sum(r * xw * xw), np.sum(r * xw * xw * xw),
+        np.sum(r), np.sum(keep(r * np.cos(two_k * xw))), np.sum(keep(r * np.sin(two_k * xw))),
+        np.sum(keep(r * xw)), np.sum(r * xw * xw), np.sum(keep(r * xw * xw * xw)),
         np.sum(r * (xw * xw) * (xw * xw)),
         np.sum(np.where((xw < central_halfwidth) & (xw > -central_halfwidth), r, 0.0)),
-        np.sum(rho_log), np.sum(r * r), np.sum(r * np.real(np.asarray(potential))[window]),
+        np.sum(keep(rho_log)), np.sum(r * r),
+        np.sum(keep(r * np.real(np.asarray(potential))[window])),
         site_squared, site_log, pixel_squared, overlap.real, overlap.imag,
         np.sum(power), np.sum(np.where(k2 < kl2, power, 0.0)),
         np.sum(np.where((k2 >= kl2) & (k2 < 9.0 * kl2), power, 0.0)),
