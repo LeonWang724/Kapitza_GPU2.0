@@ -31,7 +31,8 @@ from phase_metric import METRIC_NAME
 
 # The 6.0 settings: these scans test tabs, batches and merging, not the 7.0
 # quasimomentum, smoothing and extended metrics, which have their own tests.
-SETTINGS_6 = {"ExtendedMetrics": False, "INITIAL_QUASIMOMENTUM_KL": 0.0, "DensitySmoothing_um": 0.0}
+SETTINGS_6 = {"ExtendedMetrics": False, "INITIAL_QUASIMOMENTUM_KL": 0.0, "DensitySmoothing_um": 0.0,
+              "GRID_POINTS": 65536, "INITIAL_CLOUD_WIDTH_UM": 30.0, "HOLD_TIME_MS": None}
 
 
 # A stand-in executable exercises real Python subprocesses, configs and files.

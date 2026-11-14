@@ -222,7 +222,8 @@ class ScanTests(unittest.TestCase):
     def run_scan(self, inverted, *arguments, quasimomentum=0.0, smoothing_um=0.0):
         with (patch.object(runner, "SCRIPT_DIRECTORY", self.core),
               patch.multiple(runner, INITIAL_QUASIMOMENTUM_KL=quasimomentum,
-                             DensitySmoothing_um=smoothing_um),
+                             DensitySmoothing_um=smoothing_um, GRID_POINTS=65536,
+                             INITIAL_CLOUD_WIDTH_UM=30.0, HOLD_TIME_MS=None),
               patch.multiple(runner, ExtendedMetrics=True, INVERTED=inverted, NUMBER_OF_TABS=1,
                              LATTICE_DEPTH_V0_ER=10.0, INITIAL_LATTICE_DEPTH_V0_ER=20.0,
                              ALPHA_VALUES=np.array([4.0, 8.0]),

@@ -172,20 +172,22 @@ def green_wall_potential(x, Er, absorber_length, height_er, sigma_um, gap_um):
                      + np.exp(-(x - centre)**2 / (2.0 * sigma**2)))
 
 
-def check_green_walls(height_er, sigma_um, gap_um):
+def check_green_walls(height_er, sigma_um, gap_um, *, grid_points=None, envelope_sigma_m=None):
     """Validate wall settings on the simulation grid before any run starts.
 
     Returns the settings plus the approximate fraction of the initial cloud
     that starts between the wall centres.
     """
-    x = np.arange(-GRID_POINTS//2, GRID_POINTS//2) * GRID_SPACING_M
+    points = GRID_POINTS if grid_points is None else int(grid_points)
+    sigma = ENVELOPE_SIGMA_M if envelope_sigma_m is None else float(envelope_sigma_m)
+    x = np.arange(-points//2, points//2) * GRID_SPACING_M
     kL = 2.0*np.pi / 1064E-09
     Er = hbar**2 * kL**2 / (2*mli)
     green_wall_potential(x, Er, ABSORBER_FRACTION*(x[-1]-x[0]), height_er, sigma_um, gap_um)
     half_gap = 0.5 * float(gap_um) * 1E-06
     return {
         "height_er": float(height_er), "sigma_um": float(sigma_um), "gap_um": float(gap_um),
-        "initial_fraction_between_walls": math.erf(half_gap / (np.sqrt(2.0) * ENVELOPE_SIGMA_M)),
+        "initial_fraction_between_walls": math.erf(half_gap / (np.sqrt(2.0) * sigma)),
     }
 
     
@@ -195,7 +197,7 @@ def check_green_walls(height_er, sigma_um, gap_um):
 def create_init_state(
     V0, alpha, nu_flo, phi, initial_lattice_depth_v0_er=None,
     *, output_directory=None, config_path=None, green_walls=None, drive_phase=None,
-    quasimomentum=0.0,
+    quasimomentum=0.0, grid_points=None, envelope_sigma_m=None,
 ):
     # green_walls: None (no walls) or {"height_er", "sigma_um", "gap_um"};
     # see green_wall_potential(). The walls are static, not modulated.
@@ -217,19 +219,29 @@ def create_init_state(
         raise ValueError("The 5.0 drive keeps the lattice fixed; the position phase must be 0.")
     if isinstance(quasimomentum, bool) or not -1.0 < float(quasimomentum) < 1.0:
         raise ValueError("The initial quasimomentum must satisfy -1 < q < 1 (units of kL).")
+    #
+    # grid_points (8.0): number of 23 nm grid points, i.e. the simulated box;
+    #   None = GRID_POINTS (65536, +-0.75 mm), the box of 4.0 to 7.0. The
+    #   point's config gets the same points_x.
+    # envelope_sigma_m (8.0): sigma of |psi|^2 of the Gaussian envelope (m);
+    #   None = ENVELOPE_SIGMA_M (30 um), the starting cloud of 4.0 to 7.0.
+    n_x = GRID_POINTS if grid_points is None else int(grid_points)
+    if isinstance(grid_points, bool) or n_x < 1024 or n_x % 2:
+        raise ValueError("grid_points must be an even number of at least 1024.")
+    sigma = ENVELOPE_SIGMA_M if envelope_sigma_m is None else float(envelope_sigma_m)
+    if not sigma > 0.0 or 6.0 * sigma > n_x * GRID_SPACING_M * (1.0 - 2.0 * ABSORBER_FRACTION):
+        raise ValueError("The starting cloud must be positive and fit well inside the absorbing walls.")
     # Parameters
     #V0 = 10.0          # lattice depth in E_R
     q = float(quasimomentum)   # quasimomentum in units of k_L, -1 < q < 1
     band_index = 0    # 0 = lowest band
     n_pw = 40         # plane waves on each side
-    n_x = GRID_POINTS
     #n_cells = 3079
     
     lam = 1064E-09
     kL = 2.0*np.pi / lam
     
-    #Parameters gaussian envelope
-    sigma = ENVELOPE_SIGMA_M
+    #Parameters gaussian envelope (sigma set above)
     p0 = 0.0 * kL
     t0 = 0    #Sets momentum spread
     
@@ -384,6 +396,8 @@ def create_init_state(
         print(f"floquet_omega: {2.0*np.pi*nu_flo*ts}")
     
     update_config_value(str(config_path or "gpe1d.config"), "floquet_omega", 2.0*np.pi*nu_flo*ts)
+    # 8.0: the config's grid always matches the generated files.
+    update_config_value(str(config_path or "gpe1d.config"), "points_x", n_x)
     if drive_phase is not None:
         # The solver evolves with cos(omega t + floquet_phase) = sin(omega t + drive_phase).
         update_config_value(str(config_path or "gpe1d.config"), "floquet_phase",

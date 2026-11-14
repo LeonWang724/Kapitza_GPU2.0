@@ -1,9 +1,10 @@
 """Check the extended-metric sums of this GPU against NumPy.
 
 Two GPU batches of two short points each, with full snapshots: one batch
-non-inverted with the 7.0 settings (4 um density smoothing, starting
-quasimomentum 0.1 kL) and one inverted with the 6.0 settings (no smoothing,
-q = 0), both with the 5.0 drive. Points of different loading cannot share a
+non-inverted with the 8.0 settings (262144-point box, 40 um starting cloud,
+4 um density smoothing, starting quasimomentum 0.1 kL) and one inverted with
+the 6.0 settings (65536 points, 30 um, no smoothing, q = 0), both with the 5.0
+drive. Points of different loading cannot share a
 batch, because the lattice-site edges sit where the atoms start; a scan never
 mixes them either. At every status iteration the
 solver's extended sums must match an independent NumPy calculation on the
@@ -38,8 +39,9 @@ import extended_metrics  # noqa: E402
 from phase_metric import smooth_density, smoothing_half_width  # noqa: E402
 
 # One GPU batch per loading; every point of a batch shares the site offset.
-# Settings per batch: (density smoothing in um, starting quasimomentum in kL).
-SETTINGS = {"non_inverted": (4.0, 0.1), "inverted": (0.0, 0.0)}
+# Settings per batch: (density smoothing in um, starting quasimomentum in kL,
+# grid points, starting cloud width in um).
+SETTINGS = {"non_inverted": (4.0, 0.1, 262144, 40.0), "inverted": (0.0, 0.0, 65536, 30.0)}
 BATCHES = {
     "non_inverted": ({"alpha": 4.0, "frequency_hz": 1.9e6},
                      {"alpha": 12.0, "frequency_hz": 0.8e6}),
@@ -60,16 +62,19 @@ def point_label(loading: str, point: dict) -> str:
 
 
 def prepare(directory: Path, point: dict, inverted: bool, iterations: int,
-            smoothing_um: float = 0.0, quasimomentum: float = 0.0) -> Path:
+            smoothing_um: float = 0.0, quasimomentum: float = 0.0,
+            grid_points: int = 65536, cloud_width_um: float = 30.0) -> Path:
     directory.mkdir(parents=True)
     config = directory / "run.config"
     shutil.copy2(CORE / "gpe1d.config", config)
     phase = experiment_drive_phase(point["alpha"], inverted)
     create_init_state(DEPTH, point["alpha"], point["frequency_hz"], 0.0, INITIAL,
                       output_directory=directory / "in", config_path=config, drive_phase=phase,
-                      quasimomentum=quasimomentum)
+                      quasimomentum=quasimomentum, grid_points=grid_points,
+                      envelope_sigma_m=cloud_width_um * 1e-6)
     (directory / "out").mkdir()
-    grid = {"initial_lattice_depth_v0_er": INITIAL, "inverted": inverted}
+    grid = {"initial_lattice_depth_v0_er": INITIAL, "inverted": inverted,
+            "initial_cloud_width_um": cloud_width_um}
     update_config(config, {
         "initial_state_file": directory / "in" / "lattice_gauss.h5",
         "potential_file": directory / "in" / "vstatic.h5",
@@ -153,9 +158,10 @@ def main() -> int:
             contract = {"final_snapshot_count": 3, "cut_points_each_edge": 100}
             for loading, points in BATCHES.items():
                 inverted = loading == "inverted"
-                smoothing_um, quasimomentum = SETTINGS[loading]
+                smoothing_um, quasimomentum, grid_points, width = SETTINGS[loading]
                 configs = [prepare(work / f"{loading}_{index}", point, inverted,
-                                   arguments.iterations, smoothing_um, quasimomentum)
+                                   arguments.iterations, smoothing_um, quasimomentum,
+                                   grid_points, width)
                            for index, point in enumerate(points)]
                 log = f"solver_{loading}.log"
                 code = run_logged([str(executable), *map(str, configs), "--device",
@@ -169,7 +175,8 @@ def main() -> int:
                     worst = compare(path.parent, config, arguments.rtol)
                     summary = extended_metrics.gpu_summary(path.parent / "extended.csv",
                                                            config, contract)
-                    check = {"name": f"{point_label(loading, point)}, smoothing {smoothing_um:g} um, "
+                    check = {"name": f"{point_label(loading, point)}, {grid_points} points, "
+                                     f"{width:g} um cloud, smoothing {smoothing_um:g} um, "
                                      f"q = {quasimomentum:g} kL: extended sums == NumPy",
                              "status": "passed", "max_relative_difference": worst,
                              "pendulum_cos": summary["pendulum_cos"],

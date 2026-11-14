@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 
-from create_initial_state_function import GRID_SPACING_M, check_green_walls, create_init_state
+from create_initial_state_function import (
+    ABSORBER_FRACTION, GRID_SPACING_M, check_green_walls, create_init_state,
+)
 from level_statistics import validate_settings as level_statistics_settings
 from phase_metric import smoothing_contract
 from compact_sweep import run_compact_sweep
@@ -26,6 +29,7 @@ from cuda_workflow_common import (
     query_json,
     read_config,
     sha256_file,
+    update_config,
     utc_now,
     write_json_atomic,
 )
@@ -65,6 +69,24 @@ INITIAL_QUASIMOMENTUM_KL = 0.1
 # density (they resolve the inside of a 532 nm site, which 4 um averages away);
 # momentum and amplitude columns are not position images. 0 turns it off.
 DensitySmoothing_um = 4.0
+
+# 8.0: the simulated box, in 23 nm grid points. 262144 is +-3.0 mm with
+# absorbing walls from +-2.1 mm, so the fast atoms that make the widest
+# experimental clouds (standard deviation ~0.9 mm after 2 ms) stay in the box.
+# 65536 (+-0.75 mm, walls from +-0.53 mm) is the box of 4.0-7.0, about 4.5x
+# faster. An even number of at least 1024; powers of 2 run fastest.
+GRID_POINTS = 262144
+
+# 8.0: the starting cloud: standard deviation of |psi|^2 of the Gaussian
+# envelope, in um. 30 is the cloud of 4.0-7.0; set it from the lab's
+# unmodulated reference trial. The central window (central_fraction) is two
+# of these widths.
+INITIAL_CLOUD_WIDTH_UM = 30.0
+
+# 8.0: hold time with the drive on, in ms (the lab's t_mod), turned into time
+# steps of the solver. None keeps number_of_iterations from gpe1d.config
+# (70000 steps = 2.045 ms, as 4.0-7.0).
+HOLD_TIME_MS = 2.0
 
 # Green walls: two repulsive Gaussian walls around the initial wavefunction,
 # added to the static potential (the drive does not modulate them). They are
@@ -117,7 +139,9 @@ def green_wall_settings() -> tuple[dict | None, float | None]:
         raise ValueError("GreenWalls must be True or False.")
     if not GreenWalls:
         return None, None
-    checked = check_green_walls(GreenWallHeight_ER, GreenWallSigma_um, GreenWallGap_um)
+    checked = check_green_walls(GreenWallHeight_ER, GreenWallSigma_um, GreenWallGap_um,
+                                grid_points=GRID_POINTS,
+                                envelope_sigma_m=float(INITIAL_CLOUD_WIDTH_UM) * 1e-6)
     fraction = checked.pop("initial_fraction_between_walls")
     return checked, fraction
 
@@ -126,13 +150,48 @@ def extended_settings() -> dict | None:
     if not ExtendedMetrics:
         return None
     from extended_metrics import contract_settings
-    return contract_settings()
+    return contract_settings({"initial_cloud_width_um": float(INITIAL_CLOUD_WIDTH_UM)})
+
+
+def scan_settings(base: dict) -> dict:
+    """8.0: the validated box, starting cloud and hold time of the scan."""
+    if isinstance(GRID_POINTS, bool) or not isinstance(GRID_POINTS, int) \
+            or GRID_POINTS < 1024 or GRID_POINTS % 2:
+        raise ValueError("GRID_POINTS must be an even integer of at least 1024.")
+    width = INITIAL_CLOUD_WIDTH_UM
+    if isinstance(width, bool) or not isinstance(width, (int, float)) or not width > 0:
+        raise ValueError("INITIAL_CLOUD_WIDTH_UM must be a positive number of micrometres.")
+    half = GRID_POINTS // 2 * GRID_SPACING_M * 1e6
+    walls = half - ABSORBER_FRACTION * (GRID_POINTS - 1) * GRID_SPACING_M * 1e6
+    if 3.0 * width >= walls:
+        raise ValueError("The starting cloud does not fit inside the absorbing walls; "
+                         "raise GRID_POINTS or lower INITIAL_CLOUD_WIDTH_UM.")
+    from extended_metrics import solver_time_unit_s
+    step_s = (float(base["time_step"]) * solver_time_unit_s()) if "time_step" in base else None
+    if HOLD_TIME_MS is None:
+        steps = int(float(base["number_of_iterations"]))
+    elif step_s is None:
+        raise ValueError("HOLD_TIME_MS needs time_step in gpe1d.config.")
+    elif isinstance(HOLD_TIME_MS, bool) or not isinstance(HOLD_TIME_MS, (int, float)) \
+            or not HOLD_TIME_MS > 0:
+        raise ValueError("HOLD_TIME_MS must be None or a positive number of milliseconds.")
+    else:
+        steps = int(round(float(HOLD_TIME_MS) * 1e-3 / step_s))
+    return {
+        "grid_points": GRID_POINTS, "box_half_width_um": half, "absorber_starts_um": walls,
+        "initial_cloud_width_um": float(width),
+        "hold_time_ms": None if HOLD_TIME_MS is None else float(HOLD_TIME_MS),
+        "number_of_iterations": steps,
+        "simulated_hold_ms": None if step_s is None else steps * step_s * 1e3,
+    }
 
 
 def dataset_label(green_walls: dict | None) -> str:
     return phase_dataset_label(
         LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER, 0.0, green_walls, inverted=INVERTED,
         quasimomentum=float(INITIAL_QUASIMOMENTUM_KL), smoothing_um=float(DensitySmoothing_um),
+        grid_points=GRID_POINTS, cloud_width_um=float(INITIAL_CLOUD_WIDTH_UM),
+        hold_time_ms=HOLD_TIME_MS,
     )
 
 
@@ -185,9 +244,10 @@ def main() -> int:
                 or not isinstance(INITIAL_QUASIMOMENTUM_KL, (int, float)) \
                 or not -1.0 < INITIAL_QUASIMOMENTUM_KL < 1.0:
             raise ValueError("INITIAL_QUASIMOMENTUM_KL must be a number with -1 < q < 1.")
-        smoothing = smoothing_contract(
-            DensitySmoothing_um, float(read_config(SCRIPT_DIRECTORY / "gpe1d.config")["step_x"]),
-            GRID_SPACING_M)
+        base_values = read_config(SCRIPT_DIRECTORY / "gpe1d.config")
+        smoothing = smoothing_contract(DensitySmoothing_um, float(base_values["step_x"]),
+                                       GRID_SPACING_M)
+        scan = scan_settings(base_values)
         level_statistics = (level_statistics_settings(float(INITIAL_QUASIMOMENTUM_KL),
                                                       LevelStatisticsPlaneWaveCutoff)
                             if CalculateLevelStatistics or ExtendedMetrics else None)
@@ -215,6 +275,14 @@ def main() -> int:
             print("Note: the walls overlap the initial cloud.")
     else:
         print("Green walls: off")
+    print(f"Box: {scan['grid_points']:,} grid points, +/-{scan['box_half_width_um'] / 1e3:.2f} mm, "
+          f"absorbing walls from +/-{scan['absorber_starts_um'] / 1e3:.2f} mm; "
+          f"starting cloud {scan['initial_cloud_width_um']:g} um.")
+    hold = (f"{scan['hold_time_ms']:g} ms" if scan["hold_time_ms"] is not None
+            else "from gpe1d.config")
+    simulated = (f" ({scan['simulated_hold_ms']:.4f} ms)"
+                 if scan["simulated_hold_ms"] is not None else "")
+    print(f"Hold time: {hold} = {scan['number_of_iterations']:,} steps{simulated}.")
     print(f"Initial quasimomentum: q = {float(INITIAL_QUASIMOMENTUM_KL):g} hbar kL for every atom "
           "(GPU start, Bloch-state model, level statistics).")
     if smoothing:
@@ -228,7 +296,7 @@ def main() -> int:
         if arguments.storage != "compact" or arguments.reference_loop:
             parser.error("ExtendedMetrics needs compact storage and the fused loop "
                          "(no --storage full, no --reference-loop).")
-        print("Extended metrics: on (GPU, q = 0 Floquet model and classical ensemble "
+        print("Extended metrics: on (GPU, Bloch-state Floquet model and classical ensemble "
               "columns; level statistics on).")
     else:
         print("Extended metrics: off")
@@ -294,6 +362,13 @@ def main() -> int:
     base_config = SCRIPT_DIRECTORY / "gpe1d.config"
     if not base_config.is_file():
         raise FileNotFoundError(base_config)
+    # 8.0: one config for the whole scan, with its box and hold time; every
+    # point and tab starts from it.
+    scan_config = results_root / "gpe1d_scan.config"
+    shutil.copy2(base_config, scan_config)
+    update_config(scan_config, {"points_x": scan["grid_points"],
+                                "number_of_iterations": scan["number_of_iterations"]})
+    base_config = scan_config
 
     manifest_path = results_root / "run_manifest.json"
     parameter_label = dataset_label(green_walls)
@@ -336,6 +411,11 @@ def main() -> int:
             # 7.0: starting quasimomentum (units of kL) and density smoothing (um).
             "initial_quasimomentum_kl": float(INITIAL_QUASIMOMENTUM_KL),
             "density_smoothing_um": float(DensitySmoothing_um),
+            # 8.0: box, starting cloud width and hold time (None = gpe1d.config's steps).
+            "grid_points": scan["grid_points"],
+            "initial_cloud_width_um": scan["initial_cloud_width_um"],
+            "hold_time_ms": scan["hold_time_ms"],
+            "number_of_iterations": scan["number_of_iterations"],
         },
         "analysis_contract": {
             "statistics_version": 1,

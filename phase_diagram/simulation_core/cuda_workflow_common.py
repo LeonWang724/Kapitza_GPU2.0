@@ -77,6 +77,11 @@ def generate_point_inputs(
     quasimomentum = float(grid.get("initial_quasimomentum_kl", 0.0))
     if quasimomentum != 0.0:
         extra["quasimomentum"] = quasimomentum
+    # 8.0 grids record the box and the starting cloud width.
+    if grid.get("grid_points") is not None:
+        extra["grid_points"] = int(grid["grid_points"])
+    if grid.get("initial_cloud_width_um") is not None:
+        extra["envelope_sigma_m"] = float(grid["initial_cloud_width_um"]) * 1e-6
     create_initial_state(
         grid["lattice_depth_v0_er"], float(alpha), float(frequency),
         grid.get("phase_radians", 0.0), grid["initial_lattice_depth_v0_er"],
@@ -104,12 +109,17 @@ def phase_dataset_label(
     inverted: bool | None = None,
     quasimomentum: float = 0.0,
     smoothing_um: float = 0.0,
+    grid_points: int | None = None,
+    cloud_width_um: float | None = None,
+    hold_time_ms: float | None = None,
 ) -> str:
     """Build the shared descriptive label used by datasets and analysis files.
 
     5.0 scans pass `inverted` and are labelled Inverted or NonInverted; 4.0
     scans keep the position phase in the label. 7.0 adds the starting
-    quasimomentum and the density smoothing when they are not 0.
+    quasimomentum and the density smoothing when they are not 0; 8.0 adds the
+    box and the starting cloud width when they differ from 4.0-7.0's (65536
+    points, 30 um) and the hold time when it is set.
     """
     if inverted is None:
         start = f"Phase_{parameter_token(phase_radians)}rad"
@@ -130,6 +140,12 @@ def phase_dataset_label(
         label += f"_Q{parameter_token(quasimomentum)}kL"
     if smoothing_um:
         label += f"_Smooth{parameter_token(smoothing_um)}um"
+    if grid_points is not None and int(grid_points) != 65536:
+        label += f"_Box{int(grid_points)}"
+    if cloud_width_um is not None and float(cloud_width_um) != 30.0:
+        label += f"_W{parameter_token(cloud_width_um)}um"
+    if hold_time_ms is not None:
+        label += f"_T{parameter_token(hold_time_ms)}ms"
     return label
 
 

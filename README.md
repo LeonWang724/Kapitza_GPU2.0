@@ -1,4 +1,41 @@
-# Kapitza_GPU7.0
+# Kapitza_GPU8.0
+
+Version 8.0 keeps everything of 7.0 and makes the simulation comparable with the
+lab's phase diagrams (trial 11243: the simulated box cut off exactly the fast
+atoms that make the widest experimental clouds). Three settings in
+`phase_diagram/simulation_core/run_phase_diagram_CUDA.py`; with `GRID_POINTS =
+65536`, `INITIAL_CLOUD_WIDTH_UM = 30` and `HOLD_TIME_MS = None` a run is
+identical to 7.0.
+
+```python
+GRID_POINTS = 262144          # box +-3.0 mm, absorbing walls from +-2.1 mm (7.0: 65536)
+INITIAL_CLOUD_WIDTH_UM = 30.0 # starting cloud, std of |psi|^2; set from the reference trial
+HOLD_TIME_MS = 2.0            # drive time like the lab's t_mod; None = gpe1d.config's steps
+```
+
+- **Box.** 262144 grid points of 23 nm instead of 65536, so atoms flying out at a
+  few hbar kL stay in the box for the whole hold instead of reaching the
+  absorbing walls at +-0.53 mm and vanishing. About 4.5x the GPU time per point;
+  about 52 MB of GPU memory per point (1.7 GB for a batch of 32).
+- **Starting cloud.** The width of the Gaussian envelope of the starting
+  state. The central window of `central_fraction` is two of these widths.
+- **Hold time.** Turned into solver steps (2 ms = 68445 steps of 29.2 ns).
+- The runner writes one config for the scan (`gpe1d_scan.config` in the
+  results folder) with the box and the steps; every point and tab starts from
+  it, and the generator writes the same `points_x` into each point's config.
+- **Normalizing like `kpAnalysis.m`'s `isNormalize`.** The lab divides by the
+  initial-state metric of its reference trial. The new columns
+  `sigma_x_4um_um_initial` and `coarse_ipr_initial` hold the starting values
+  of the camera-pixel width and IPR (`sigma_x_um_initial` and `metric_initial`
+  already existed), so every point carries its own reference.
+- The dataset name, the manifest and MAKE's columns record the box, the cloud
+  and the hold time. No change to the GPU code: a 7.0 build runs 8.0 scans.
+
+`VALIDATE_EXTENDED_CUDA.bat` now runs one batch with the 8.0 settings
+(262144 points, 40 um cloud, 4 um smoothing, q = 0.1) and one with the 6.0
+settings, and checks every sum against NumPy.
+
+## Version 7.0
 
 Version 7.0 keeps everything of 6.0 and adds two settings in
 `phase_diagram/simulation_core/run_phase_diagram_CUDA.py`. Setting both to 0

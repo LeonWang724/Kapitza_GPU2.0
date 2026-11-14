@@ -51,6 +51,8 @@ GPU_FIELDS = {
     "order_2": "Fraction with hbar kL <= |p| < 3 hbar kL (+-2 hbar kL orders)",
     "energy_absorbed_er": "Energy absorbed in the time-averaged lattice, final - initial (E_R)",
     "sigma_x_4um_um": "7.0: cloud width from 4 um pixels, as MuscleMuseum's computeStDev (um)",
+    "sigma_x_4um_um_initial": "8.0: that width at the first status step, the reference for normalizing (um)",
+    "coarse_ipr_initial": "8.0: coarse_ipr at the first status step, the reference for normalizing",
 }
 
 Q0_FIELDS = {

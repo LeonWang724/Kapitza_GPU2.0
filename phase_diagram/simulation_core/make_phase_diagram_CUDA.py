@@ -102,11 +102,14 @@ def add_derived_columns(row: dict) -> dict:
 # and plotted along them. A scan without walls has wall height 0. 5.0 scans
 # fill "inverted" (1 or 0) and leave phase_radians blank; 4.0 scans fill
 # phase_radians (the lattice's position phase) and leave "inverted" blank.
-# 7.0 scans add the starting quasimomentum and the density smoothing (0 before).
+# 7.0 scans add the starting quasimomentum and the density smoothing (0 before);
+# 8.0 scans the box, the starting cloud width and the hold time (65536 points,
+# 30 um and blank before).
 DATASET_COLUMNS = (
     "lattice_depth_v0_er", "initial_lattice_depth_v0_er", "phase_radians", "inverted",
     "green_wall_height_er", "green_wall_sigma_um", "green_wall_gap_um",
     "initial_quasimomentum_kl", "density_smoothing_um",
+    "grid_points", "initial_cloud_width_um", "hold_time_ms",
 )
 # Inputs that can be held fixed when several rows share one plotted point.
 PARAMETER_COLUMNS = ("alpha", "drive_frequency_hz") + DATASET_COLUMNS
@@ -146,7 +149,10 @@ def grid_parameter_label(grid: dict) -> str:
     return phase_dataset_label(lattice_depth, initial_depth, phase, grid.get("green_walls"),
                                inverted=inverted,
                                quasimomentum=float(grid.get("initial_quasimomentum_kl", 0.0)),
-                               smoothing_um=float(grid.get("density_smoothing_um", 0.0)))
+                               smoothing_um=float(grid.get("density_smoothing_um", 0.0)),
+                               grid_points=grid.get("grid_points"),
+                               cloud_width_um=grid.get("initial_cloud_width_um"),
+                               hold_time_ms=grid.get("hold_time_ms"))
 
 
 def automatic_plot_title(grid: dict) -> str:
@@ -171,6 +177,11 @@ def automatic_plot_title(grid: dict) -> str:
     if quasimomentum or smoothing:
         title += (f"\nq = {quasimomentum:g} hbar kL"
                   + (f", {smoothing:g} um smoothing" if smoothing else ""))
+    if grid.get("grid_points") is not None:
+        hold = grid.get("hold_time_ms")
+        title += (f"\nBox {int(grid['grid_points'])} points, cloud "
+                  f"{float(grid.get('initial_cloud_width_um', 30.0)):g} um"
+                  + (f", hold {float(hold):g} ms" if hold is not None else ""))
     return title
 
 
@@ -187,6 +198,9 @@ def dataset_columns(grid: dict) -> dict:
         "green_wall_gap_um": float(walls["gap_um"]) if walls else None,
         "initial_quasimomentum_kl": float(grid.get("initial_quasimomentum_kl", 0.0)),
         "density_smoothing_um": float(grid.get("density_smoothing_um", 0.0)),
+        "grid_points": int(grid.get("grid_points", 65536)),
+        "initial_cloud_width_um": float(grid.get("initial_cloud_width_um", 30.0)),
+        "hold_time_ms": None if grid.get("hold_time_ms") is None else float(grid["hold_time_ms"]),
     }
 
 

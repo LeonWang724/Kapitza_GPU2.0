@@ -34,6 +34,9 @@ from make_phase_diagram_CUDA import DATASET_COLUMNS, dataset_columns  # noqa: E4
 from phase_metric import smooth_density, smoothing_contract, smoothing_half_width  # noqa: E402
 from test_parallel_sweep import FAKE_SOLVER  # noqa: E402
 
+# The 7.0 tests keep the 4.0-7.0 box, cloud and step count; 8.0 has its own tests.
+SETTINGS_7 = {"GRID_POINTS": 65536, "INITIAL_CLOUD_WIDTH_UM": 30.0, "HOLD_TIME_MS": None}
+
 KL = em.solver_wavevector()
 PIXEL = em.PIXEL_M / GRID_SPACING_M
 SUMS = {name: index for index, name in enumerate(EXTENDED_SUM_NAMES)}
@@ -265,7 +268,8 @@ class RecordingTests(unittest.TestCase):
         self.assertEqual(dataset_columns(grid)["density_smoothing_um"], 4.0)
 
     def test_plan_reports_both_settings(self):
-        with (patch.object(runner, "locate_executable") as locate,
+        with (patch.multiple(runner, **SETTINGS_7),
+              patch.object(runner, "locate_executable") as locate,
               patch.object(sys, "argv", ["runner", "--plan"]),
               contextlib.redirect_stdout(io.StringIO()) as output):
             self.assertEqual(runner.main(), 0)
@@ -303,6 +307,7 @@ class ScanTests(unittest.TestCase):
             solver.chmod(0o755)
             results = root / "results"
             with (patch.object(runner, "SCRIPT_DIRECTORY", core),
+                  patch.multiple(runner, **SETTINGS_7),
                   patch.multiple(runner, INVERTED=False, NUMBER_OF_TABS=1,
                                  LATTICE_DEPTH_V0_ER=10.0, INITIAL_LATTICE_DEPTH_V0_ER=20.0,
                                  ALPHA_VALUES=np.array([4.0]),

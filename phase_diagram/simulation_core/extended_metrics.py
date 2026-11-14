@@ -39,11 +39,17 @@ SERIES_COLUMNS = ("iteration", "drive", "norm", "kinetic_sum", "density_overlap"
     + EXTENDED_SUM_NAMES
 
 
-def contract_settings() -> dict:
+def central_halfwidth_m(grid: dict | None = None) -> float:
+    """The central window: two starting cloud widths (8.0 INITIAL_CLOUD_WIDTH_UM)."""
+    width = (grid or {}).get("initial_cloud_width_um")
+    return CENTRAL_HALFWIDTH_M if width is None else 2.0 * float(width) * 1e-6
+
+
+def contract_settings(grid: dict | None = None) -> dict:
     """The extended-metric settings recorded in the run manifest."""
     return {
         "version": 2,   # 7.0: the 4 um pixel moments (sigma_x_4um_um)
-        "central_halfwidth_um": CENTRAL_HALFWIDTH_M * 1e6,
+        "central_halfwidth_um": central_halfwidth_m(grid) * 1e6,
         "pixel_um": PIXEL_M * 1e6,
         "q0_plane_wave_cutoff": Q0_PLANE_WAVE_CUTOFF,
         "echo_relative_change": ECHO_RELATIVE_CHANGE,
@@ -77,7 +83,7 @@ def solver_settings(grid: dict, alpha: float) -> dict:
     offset = 0.5 * period if loading_coefficient(grid, alpha) < 0.0 else 0.0
     return {
         "extended_metrics_lattice_wavevector": repr(wavevector),
-        "extended_metrics_central_halfwidth": repr(CENTRAL_HALFWIDTH_M / GRID_SPACING_M),
+        "extended_metrics_central_halfwidth": repr(central_halfwidth_m(grid) / GRID_SPACING_M),
         "extended_metrics_site_offset": repr(offset),
         "extended_metrics_pixel_width": repr(PIXEL_M / GRID_SPACING_M),
     }
@@ -315,6 +321,10 @@ def gpu_summary(path: Path, config: dict, contract: dict) -> dict:
         "momentum_growth_rate_per_ms": _slope(time_ms, values["p_squared"], early, True),
         "spreading_speed_um_per_ms": _slope(time_ms, values["sigma_um"], late, False),
         "sigma_x_um_initial": finite_or_none(values["sigma_um"][0]),
+        # 8.0: the starting values of the camera-pixel columns, for normalizing
+        # like kpAnalysis.m's isNormalize (its reference is the initial state).
+        "sigma_x_4um_um_initial": _root_um(finite_or_none(values["pixel_variance"][0])),
+        "coarse_ipr_initial": finite_or_none(values["coarse_ipr"][0]),
         "width_time_std_um": _std(values["sigma_um"], final),
         "central_fraction": _mean(values["central_fraction"], final),
         "escape_fraction": finite_or_none(1.0 - values["norm"][-1] / values["norm"][0]),
