@@ -20,7 +20,10 @@ struct EnergyValues {
 class Diagnostics1D {
 public:
     // extended: also keep psi at t = 0 and the bins for the 6.0 extended sums.
-    Diagnostics1D(int points, double step_x, double beta, bool extended = false);
+    // smoothing_half_width > 0 (7.0, fused loop only): the enqueued position
+    // metrics use |psi|^2 averaged over 2 h + 1 points; see diagnostics_1d.cu.
+    Diagnostics1D(int points, double step_x, double beta, bool extended = false,
+                  int smoothing_half_width = 0);
 
     double norm(const cuDoubleComplex* psi);
     EnergyValues energy(const cuDoubleComplex* psi,
@@ -60,13 +63,19 @@ private:
     bool extended_;
     ExtendedSettings extended_settings_{};
     int extended_cut_ = 0;
+    int smoothing_ = 0;                  // 7.0: half width h, 0 = off
+    // The unsmoothed |psi|^2 of the last enqueued psi (density_ itself when
+    // smoothing is off).
+    double* raw_density() { return smoothing_ ? raw_density_.data() : density_.data(); }
     int site_bins_ = 0;
     int pixel_bins_ = 0;
     DeviceBuffer<cuDoubleComplex> initial_psi_;
     DeviceBuffer<int> site_starts_;
     DeviceBuffer<int> pixel_starts_;
+    DeviceBuffer<double> pixel_centres_;  // 7.0: nominal pixel centres
     GpuReducer reducer_;
-    DeviceBuffer<double> density_;
+    DeviceBuffer<double> density_;      // smoothed when smoothing_ > 0
+    DeviceBuffer<double> raw_density_;  // 7.0: allocated only with smoothing
     DeviceBuffer<double> initial_density_;
     DeviceBuffer<double> terms_a_;
     DeviceBuffer<double> terms_b_;

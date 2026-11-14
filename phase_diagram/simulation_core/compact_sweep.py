@@ -121,6 +121,11 @@ def run_compact_sweep(
                             "phase_metric_cut_points_each_edge": contract["cut_points_each_edge"],
                             "save_psi": "false", "dp_save_potential": "false",
                         })
+                        smoothing = contract.get("density_smoothing")
+                        if smoothing:  # 7.0: smoothed |psi|^2 for the position metrics
+                            update_config(config_path, {
+                                "density_smoothing_width": repr(smoothing["width_solver_units"]),
+                            })
                         if extended:  # 6.0: the solver records the extended sums
                             update_config(config_path, {
                                 **extended_metrics.solver_settings(grid, alpha),
@@ -159,7 +164,8 @@ def run_compact_sweep(
                             record["extended_metrics"] = {
                                 **extended_metrics.empty_columns(),
                                 **extended_metrics.floquet_q0_metrics(
-                                    depth, initial, alpha, frequency, phase, hold, window),
+                                    depth, initial, alpha, frequency, phase, hold, window,
+                                    quasimomentum=float(grid.get("initial_quasimomentum_kl", 0.0))),
                                 **columns,
                             }
                     failing_index = batch[0][0]

@@ -9,8 +9,9 @@ from pathlib import Path
 
 import numpy as np
 
-from create_initial_state_function import check_green_walls, create_init_state
+from create_initial_state_function import GRID_SPACING_M, check_green_walls, create_init_state
 from level_statistics import validate_settings as level_statistics_settings
+from phase_metric import smoothing_contract
 from compact_sweep import run_compact_sweep
 from full_sweep import run_full_sweep
 from parallel_sweep import print_assignments, run_parallel_sweep, split_point_ranges
@@ -23,6 +24,7 @@ from cuda_workflow_common import (
     locate_executable,
     phase_dataset_label,
     query_json,
+    read_config,
     sha256_file,
     utc_now,
     write_json_atomic,
@@ -48,6 +50,22 @@ INITIAL_LATTICE_DEPTH_V0_ER = 40.0
 #          t = 0 is flipped and the atoms start on top; needs every alpha >= 2.
 INVERTED = False
 
+# 7.0: starting quasimomentum q of every atom, in units of hbar kL (-1 < q < 1).
+# One setting for every model: the GPU starting state (the lowest-band Bloch
+# state at q under the Gaussian envelope), the Bloch-state Floquet model (q0_
+# columns) and the level statistics. The classical ensemble has no
+# quasimomentum. 0 gives the 4.0-6.0 BEC at rest. A single q > 0 makes the cloud
+# drift; the widths are measured about its moving centre.
+INITIAL_QUASIMOMENTUM_KL = 0.1
+
+# 7.0: smoothing of the density |psi|^2 over this width (um) before every
+# position metric, like the camera's 4 um pixels: cloud width and centre, IPR,
+# central fraction, entropies, kurtosis, lattice-site populations and the
+# density overlap. The pendulum angle, on-site spread and <V> keep the raw
+# density (they resolve the inside of a 532 nm site, which 4 um averages away);
+# momentum and amplitude columns are not position images. 0 turns it off.
+DensitySmoothing_um = 4.0
+
 # Green walls: two repulsive Gaussian walls around the initial wavefunction,
 # added to the static potential (the drive does not modulate them). They are
 # centred at -gap/2 and +gap/2 around the cloud at x = 0. False leaves every
@@ -62,8 +80,8 @@ GreenWallGap_um = 200.0      # centre-to-centre distance between the two walls, 
 # eta_r_squared (same with <r^2>) of the Floquet quasienergies of the driven
 # lattice at each point, added as columns of metrics.csv. The CPU computes them
 # while the GPU runs; they do not use the GPU result or the green walls.
+# 7.0: at q = INITIAL_QUASIMOMENTUM_KL (parity sectors are split only at q = 0).
 CalculateLevelStatistics = False
-LevelStatisticsQuasimomentum = 0.0     # q in units of kL; 0 is the BEC's (parity sectors split)
 LevelStatisticsPlaneWaveCutoff = 40    # plane waves |n| <= n_max, i.e. 2 n_max + 1 levels
 
 # 6.0 extended metrics: True adds every metric of extended_fields.py to
@@ -72,8 +90,10 @@ LevelStatisticsPlaneWaveCutoff = 40    # plane waves |n| <= n_max, i.e. 2 n_max 
 # entropy, kurtosis, ...), a q = 0 Floquet model (band populations, Floquet
 # participation, slow frequency, echo, ...) and a classical ensemble. It also
 # turns on the level statistics above. Needs compact storage, the fused loop
-# and a 6.0 build; the CPU adds roughly 0.1-0.3 s per point.
-ExtendedMetrics = False
+# and a 7.0 build; the CPU adds roughly 0.1-0.3 s per point at q = 0 and about
+# three times that at any other q (the Bloch-state model then needs every plane wave).
+# 7.0 adds the cloud width from 4 um pixels (sigma_x_4um_um).
+ExtendedMetrics = True
 
 # Number of simultaneous terminal tabs sharing this grid. Any positive integer
 # works; leftover points are distributed one each to the first tabs.
@@ -109,11 +129,16 @@ def extended_settings() -> dict | None:
     return contract_settings()
 
 
+def dataset_label(green_walls: dict | None) -> str:
+    return phase_dataset_label(
+        LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER, 0.0, green_walls, inverted=INVERTED,
+        quasimomentum=float(INITIAL_QUASIMOMENTUM_KL), smoothing_um=float(DensitySmoothing_um),
+    )
+
+
 def unique_results_directory(green_walls: dict | None) -> Path:
     timestamp = datetime.now(timezone.utc).strftime("cuda_%Y%m%dT%H%M%SZ")
-    parameter_label = phase_dataset_label(
-        LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER, 0.0, green_walls, inverted=INVERTED
-    )
+    parameter_label = dataset_label(green_walls)
     path = RESULTS_DIRECTORY / f"{parameter_label}_{timestamp}"
     if path.exists():
         raise FileExistsError(f"Refusing to reuse results directory: {path}")
@@ -156,7 +181,14 @@ def main() -> int:
             raise ValueError("CalculateLevelStatistics must be True or False.")
         if not isinstance(ExtendedMetrics, bool):
             raise ValueError("ExtendedMetrics must be True or False.")
-        level_statistics = (level_statistics_settings(LevelStatisticsQuasimomentum,
+        if isinstance(INITIAL_QUASIMOMENTUM_KL, bool) \
+                or not isinstance(INITIAL_QUASIMOMENTUM_KL, (int, float)) \
+                or not -1.0 < INITIAL_QUASIMOMENTUM_KL < 1.0:
+            raise ValueError("INITIAL_QUASIMOMENTUM_KL must be a number with -1 < q < 1.")
+        smoothing = smoothing_contract(
+            DensitySmoothing_um, float(read_config(SCRIPT_DIRECTORY / "gpe1d.config")["step_x"]),
+            GRID_SPACING_M)
+        level_statistics = (level_statistics_settings(float(INITIAL_QUASIMOMENTUM_KL),
                                                       LevelStatisticsPlaneWaveCutoff)
                             if CalculateLevelStatistics or ExtendedMetrics else None)
         # Checks INVERTED and, when inverted, that every alpha >= 2.
@@ -183,6 +215,15 @@ def main() -> int:
             print("Note: the walls overlap the initial cloud.")
     else:
         print("Green walls: off")
+    print(f"Initial quasimomentum: q = {float(INITIAL_QUASIMOMENTUM_KL):g} hbar kL for every atom "
+          "(GPU start, Bloch-state model, level statistics).")
+    if smoothing:
+        if arguments.reference_loop:
+            parser.error("DensitySmoothing_um needs the fused loop (no --reference-loop).")
+        print(f"Density smoothing: {smoothing['width_um']:g} um ({2 * smoothing['half_width_points'] + 1} "
+              f"grid points, {smoothing['window_um']:.3f} um) for the position metrics.")
+    else:
+        print("Density smoothing: off")
     if ExtendedMetrics:
         if arguments.storage != "compact" or arguments.reference_loop:
             parser.error("ExtendedMetrics needs compact storage and the fused loop "
@@ -229,10 +270,16 @@ def main() -> int:
             "This executable predates the 5.0 drive phase. Run BUILD_CUDA.bat, then "
             "VALIDATE_FAST_CUDA.bat, before starting the scan."
         )
-    if ExtendedMetrics and build_info.get("extended_metrics_version") != 1:
+    if ExtendedMetrics and build_info.get("extended_metrics_version") != 2:
         raise RuntimeError(
-            "This executable predates the 6.0 extended metrics. Run BUILD_CUDA.bat, then "
+            "This executable predates the 7.0 extended metrics. Run BUILD_CUDA.bat, then "
             "VALIDATE_EXTENDED_CUDA.bat, before starting the scan."
+        )
+    if smoothing and arguments.storage == "compact" \
+            and build_info.get("density_smoothing_version") != 1:
+        raise RuntimeError(
+            "This executable predates the 7.0 density smoothing. Run BUILD_CUDA.bat, then "
+            "VALIDATE_COMPACT_CUDA.bat, before starting the scan."
         )
     # Sleeping instead of spinning while waiting for the GPU leaves CPU power
     # and thermal headroom to the GPU, especially with several tabs.
@@ -249,9 +296,7 @@ def main() -> int:
         raise FileNotFoundError(base_config)
 
     manifest_path = results_root / "run_manifest.json"
-    parameter_label = phase_dataset_label(
-        LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER, 0.0, green_walls, inverted=INVERTED
-    )
+    parameter_label = dataset_label(green_walls)
     manifest = {
         "_codex_cuda_port": "Native CUDA phase-diagram run manifest.",
         "manifest_version": 2,
@@ -288,6 +333,9 @@ def main() -> int:
             "drive": "sin(omega t + phi)",
             # None, or the walls' height (E_R), sigma (um) and centre gap (um).
             "green_walls": green_walls,
+            # 7.0: starting quasimomentum (units of kL) and density smoothing (um).
+            "initial_quasimomentum_kl": float(INITIAL_QUASIMOMENTUM_KL),
+            "density_smoothing_um": float(DensitySmoothing_um),
         },
         "analysis_contract": {
             "statistics_version": 1,
@@ -304,6 +352,8 @@ def main() -> int:
             "level_statistics": level_statistics,
             # None, or the 6.0 extended-metric settings (extended_metrics.py).
             "extended_metrics": extended_settings(),
+            # None, or the 7.0 smoothing of |psi|^2 (phase_metric.smoothing_contract).
+            "density_smoothing": smoothing,
             "normalization": "none",
             "frequency_axis_inverted": True,
             "colormap": "inferno",

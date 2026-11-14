@@ -27,7 +27,7 @@ from extended_fields import FIELD_TITLES as EXTENDED_TITLES
 from level_statistics import R2_GOE, R2_POISSON, R_GOE, R_POISSON
 from phase_metric import (
     LEVEL_STATISTICS_FIELDS, STATISTICS_FIELDS, csv_fields, csv_row, level_statistics_columns,
-    statistics_from_probabilities,
+    smooth_density, statistics_from_probabilities,
 )
 
 
@@ -102,9 +102,11 @@ def add_derived_columns(row: dict) -> dict:
 # and plotted along them. A scan without walls has wall height 0. 5.0 scans
 # fill "inverted" (1 or 0) and leave phase_radians blank; 4.0 scans fill
 # phase_radians (the lattice's position phase) and leave "inverted" blank.
+# 7.0 scans add the starting quasimomentum and the density smoothing (0 before).
 DATASET_COLUMNS = (
     "lattice_depth_v0_er", "initial_lattice_depth_v0_er", "phase_radians", "inverted",
     "green_wall_height_er", "green_wall_sigma_um", "green_wall_gap_um",
+    "initial_quasimomentum_kl", "density_smoothing_um",
 )
 # Inputs that can be held fixed when several rows share one plotted point.
 PARAMETER_COLUMNS = ("alpha", "drive_frequency_hz") + DATASET_COLUMNS
@@ -142,7 +144,9 @@ def grid_parameter_label(grid: dict) -> str:
     phase = float(grid.get("phase_radians", 0.0))
     inverted = bool(grid["inverted"]) if "inverted" in grid else None
     return phase_dataset_label(lattice_depth, initial_depth, phase, grid.get("green_walls"),
-                               inverted=inverted)
+                               inverted=inverted,
+                               quasimomentum=float(grid.get("initial_quasimomentum_kl", 0.0)),
+                               smoothing_um=float(grid.get("density_smoothing_um", 0.0)))
 
 
 def automatic_plot_title(grid: dict) -> str:
@@ -162,6 +166,11 @@ def automatic_plot_title(grid: dict) -> str:
     if walls:
         title += (f"\nGreen walls {walls['height_er']:g} E_R, sigma {walls['sigma_um']:g} um, "
                   f"gap {walls['gap_um']:g} um")
+    quasimomentum = float(grid.get("initial_quasimomentum_kl", 0.0))
+    smoothing = float(grid.get("density_smoothing_um", 0.0))
+    if quasimomentum or smoothing:
+        title += (f"\nq = {quasimomentum:g} hbar kL"
+                  + (f", {smoothing:g} um smoothing" if smoothing else ""))
     return title
 
 
@@ -176,6 +185,8 @@ def dataset_columns(grid: dict) -> dict:
         "green_wall_height_er": float(walls["height_er"]) if walls else 0.0,
         "green_wall_sigma_um": float(walls["sigma_um"]) if walls else None,
         "green_wall_gap_um": float(walls["gap_um"]) if walls else None,
+        "initial_quasimomentum_kl": float(grid.get("initial_quasimomentum_kl", 0.0)),
+        "density_smoothing_um": float(grid.get("density_smoothing_um", 0.0)),
     }
 
 
@@ -264,8 +275,12 @@ def dataset_analysis(manifest_path: Path) -> dict:
             step_x = float(config["step_x"]) if "step_x" in config else None
             if step_x is None and contract.get("statistics_version") == 1:
                 raise ValueError("Spatial statistics require the saved step_x grid spacing.")
+            # 7.0: the same smoothing of |psi|^2 the compact solver applies.
+            smoothing = contract.get("density_smoothing") or {}
+            half = int(smoothing.get("half_width_points", 0))
             statistics = statistics_from_probabilities(
-                (read_probability(snapshot) for snapshot in selected), cut=cut, step_x=step_x,
+                (smooth_density(read_probability(snapshot), half) for snapshot in selected),
+                cut=cut, step_x=step_x,
             )
             mean_metric = statistics["metric"]
             row = {"run_index": run["run_index"], "alpha": run["alpha"],

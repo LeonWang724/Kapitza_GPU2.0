@@ -30,7 +30,7 @@ import run_phase_diagram_CUDA as runner
 from cuda_workflow_common import read_config, write_json_atomic
 from make_phase_diagram_CUDA import DATASET_COLUMNS, DERIVED_COLUMNS, analyze
 from phase_metric import CSV_FIELDS, METRIC_NAME
-from test_parallel_sweep import FAKE_SOLVER
+from test_parallel_sweep import FAKE_SOLVER, SETTINGS_6
 
 SETTINGS = levels.validate_settings(0.0, 4)
 COLUMNS = ("mean_r", "mean_r_squared", "eta", "eta_r_squared", "level_ratio_count")
@@ -178,7 +178,7 @@ class SweepTests(unittest.TestCase):
 
 class RunnerTests(unittest.TestCase):
     def plan(self, **settings) -> str:
-        with (patch.multiple(runner, **settings),
+        with (patch.multiple(runner, **{**SETTINGS_6, **settings}),
               patch.object(runner, "locate_executable") as locate,
               patch.object(sys, "argv", ["runner", "--plan"]),
               contextlib.redirect_stdout(io.StringIO()) as output):
@@ -194,8 +194,8 @@ class RunnerTests(unittest.TestCase):
     def test_invalid_settings_stop_before_cuda(self):
         for settings in ({"CalculateLevelStatistics": "yes"},
                          {"CalculateLevelStatistics": True, "LevelStatisticsPlaneWaveCutoff": 1},
-                         {"CalculateLevelStatistics": True, "LevelStatisticsQuasimomentum": 1.5}):
-            with (patch.multiple(runner, **settings),
+                         {"CalculateLevelStatistics": True, "INITIAL_QUASIMOMENTUM_KL": 1.5}):
+            with (patch.multiple(runner, **{**SETTINGS_6, **settings}),
                   patch.object(runner, "locate_executable") as locate,
                   patch.object(sys, "argv", ["runner", "--plan"]),
                   contextlib.redirect_stderr(io.StringIO())):
@@ -225,6 +225,7 @@ class ScanTests(unittest.TestCase):
 
     def run_grid(self, storage):
         with (patch.object(runner, "SCRIPT_DIRECTORY", self.core),
+              patch.multiple(runner, **SETTINGS_6),
               patch.multiple(runner, CalculateLevelStatistics=True, LevelStatisticsPlaneWaveCutoff=6,
                              NUMBER_OF_TABS=2, POINTS_PER_BATCH=2, ALPHA_VALUES=np.array([10.0, 60.0]),
                              DRIVE_FREQUENCY_HZ_VALUES=np.array([1.0e6, 3.0e6])),

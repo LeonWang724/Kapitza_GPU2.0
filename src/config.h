@@ -63,6 +63,11 @@ struct ConfigData {
     double extended_metrics_site_offset = 0.0;
     double extended_metrics_pixel_width = 0.0;
 
+    // 7.0: a positive width (solver length units) averages |psi|^2 over a
+    // window of about that width before the position metrics (fused loop
+    // only; see diagnostics_1d.cu). 0 leaves every result as before.
+    double density_smoothing_width = 0.0;
+
     std::unordered_map<std::string, std::string> raw_values;
 };
 

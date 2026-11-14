@@ -10,14 +10,26 @@
 #include <cmath>
 #include <vector>
 
-Diagnostics1D::Diagnostics1D(int points, double step_x, double beta, bool extended)
+// 7.0 smoothing (smoothing_ > 0) in the enqueued sums of the fused loop:
+//   smoothed |psi|^2: phase metric (IPR, centre, width), initial-density
+//     overlap, and the extended position sums (moments, central window,
+//     entropy, IPR, lattice-site bins);
+//   raw |psi|^2: norm and energies, <cos/sin 2kL x> and <V> (they resolve the
+//     inside of a lattice site), and the 4 um pixel bins (binning into camera
+//     pixels is itself the smoothing).
+// The reference loop's functions above enqueue_* never smooth; the solver
+// refuses smoothing there.
+Diagnostics1D::Diagnostics1D(int points, double step_x, double beta, bool extended,
+                             int smoothing_half_width)
     : points_(points),
       step_x_(step_x),
       beta_(beta),
       extended_(extended),
+      smoothing_(smoothing_half_width),
       initial_psi_(extended ? static_cast<std::size_t>(points) : 0),
       reducer_(points),
       density_(points),
+      raw_density_(smoothing_half_width > 0 ? static_cast<std::size_t>(points) : 0),
       initial_density_(points),
       terms_a_(points),
       terms_b_(points),
@@ -58,6 +70,11 @@ EnergyValues Diagnostics1D::energy(const cuDoubleComplex* psi,
 }
 
 void Diagnostics1D::capture_initial_density(const cuDoubleComplex* psi) {
+    if (smoothing_ > 0) {
+        launch_density(psi, raw_density_.data(), points_);
+        launch_box_smooth(raw_density_.data(), initial_density_.data(), points_, smoothing_);
+        return;
+    }
     launch_density(psi, initial_density_.data(), points_);
 }
 
@@ -111,17 +128,18 @@ void Diagnostics1D::enqueue_status_sums(const cuDoubleComplex* psi,
                                         cufftHandle fft_plan,
                                         double* device_sums) {
     // One density serves norm, energy and overlap; each was |psi|^2 of psi.
-    launch_density(psi, density_.data(), points_);
-    reducer_.sum_into(density_.data(), points_, device_sums + kNormSum);
+    double* raw = raw_density();
+    launch_density(psi, raw, points_);
+    reducer_.sum_into(raw, points_, device_sums + kNormSum);
     CUFFT_CHECK(cufftExecZ2Z(fft_plan,
                              const_cast<cuDoubleComplex*>(psi),
                              diagnostic_fft_.data(), CUFFT_FORWARD));
     launch_kinetic_terms(diagnostic_fft_.data(), k_squared, terms_a_.data(), points_);
     reducer_.sum_into(terms_a_.data(), points_, device_sums + kKineticSum);
-    launch_energy_terms(density_.data(), potential, terms_a_.data(),
-                        terms_b_.data(), points_);
+    launch_energy_terms(raw, potential, terms_a_.data(), terms_b_.data(), points_);
     reducer_.sum_into(terms_a_.data(), points_, device_sums + kPotentialSum);
     reducer_.sum_into(terms_b_.data(), points_, device_sums + kInteractionSum);
+    if (smoothing_ > 0) launch_box_smooth(raw, density_.data(), points_, smoothing_);
     launch_overlap_terms(initial_density_.data(), density_.data(),
                          terms_a_.data(), points_);
     reducer_.sum_into(terms_a_.data(), points_, device_sums + kOverlapSum);
@@ -133,7 +151,8 @@ void Diagnostics1D::enqueue_phase_sums(const cuDoubleComplex* psi, int cut,
         throw std::runtime_error("Spatial cut removes all metric points.");
     }
     const int count = points_ - 2 * cut;
-    launch_density(psi, density_.data(), points_);
+    launch_density(psi, raw_density(), points_);
+    if (smoothing_ > 0) launch_box_smooth(raw_density(), density_.data(), points_, smoothing_);
     launch_overlap_terms(density_.data(), density_.data(), terms_a_.data(), points_);
     reducer_.sum_into(terms_a_.data() + cut, count, device_sums + kMetricSum);
     reducer_.sum_into(density_.data() + cut, count, device_sums + kMassSum);
@@ -161,6 +180,12 @@ void upload_starts(const std::vector<int>& starts, DeviceBuffer<int>& device, in
     bins = static_cast<int>(starts.size()) - 1;
 }
 
+void upload_centres(const std::vector<double>& centres, DeviceBuffer<double>& device) {
+    device.allocate(centres.size());
+    CUDA_CHECK(cudaMemcpy(device.data(), centres.data(), centres.size() * sizeof(double),
+                          cudaMemcpyHostToDevice));
+}
+
 }  // namespace
 
 void Diagnostics1D::configure_extended(const ExtendedSettings& settings, int cut) {
@@ -176,9 +201,10 @@ void Diagnostics1D::configure_extended(const ExtendedSettings& settings, int cut
     const double period = kExtendedPi / settings.lattice_wavevector;
     upload_starts(bin_starts(points_, cut, step_x_, period, settings.site_offset),
                   site_starts_, site_bins_);
-    upload_starts(bin_starts(points_, cut, step_x_, settings.pixel_width,
-                             -0.5 * settings.pixel_width),
-                  pixel_starts_, pixel_bins_);
+    const BinLayout pixels = bin_layout(points_, cut, step_x_, settings.pixel_width,
+                                        -0.5 * settings.pixel_width);
+    upload_starts(pixels.starts, pixel_starts_, pixel_bins_);
+    upload_centres(pixels.centres, pixel_centres_);
 }
 
 void Diagnostics1D::capture_initial_state(const cuDoubleComplex* psi) {
@@ -194,24 +220,29 @@ void Diagnostics1D::enqueue_extended_sums(const cuDoubleComplex* psi,
     }
     const int cut = extended_cut_;
     const int count = points_ - 2 * cut;
-    const auto weighted = [&](DensityWeight weight, double parameter, int index) {
-        launch_density_weight_terms(density_.data(), static_potential, terms_a_.data(),
+    const auto weighted = [&](const double* density, DensityWeight weight, double parameter,
+                              int index) {
+        launch_density_weight_terms(density, static_potential, terms_a_.data(),
                                     points_, step_x_, weight, parameter);
         reducer_.sum_into(terms_a_.data() + cut, count, device_sums + index);
     };
-    // density_ and diagnostic_fft_ hold |psi|^2 and the transform of psi from
+    // density_ (smoothed with 7.0 smoothing), the raw density and
+    // diagnostic_fft_ hold |psi|^2 and the transform of psi from
     // enqueue_status_sums(); nothing below overwrites them.
+    const double* smooth = density_.data();
+    const double* raw = raw_density();
     reducer_.sum_into(density_.data() + cut, count, device_sums + kExtMass);
     const double two_k = 2.0 * extended_settings_.lattice_wavevector;
-    weighted(DensityWeight::Cos, two_k, kExtCos);
-    weighted(DensityWeight::Sin, two_k, kExtSin);
-    weighted(DensityWeight::X1, 0.0, kExtX1);
-    weighted(DensityWeight::X2, 0.0, kExtX2);
-    weighted(DensityWeight::X3, 0.0, kExtX3);
-    weighted(DensityWeight::X4, 0.0, kExtX4);
-    weighted(DensityWeight::Central, extended_settings_.central_halfwidth, kExtCentral);
-    weighted(DensityWeight::DensityLogDensity, 0.0, kExtDensityLogDensity);
-    weighted(DensityWeight::Potential, 0.0, kExtPotential);
+    // Inside a lattice site: always the raw density.
+    weighted(raw, DensityWeight::Cos, two_k, kExtCos);
+    weighted(raw, DensityWeight::Sin, two_k, kExtSin);
+    weighted(smooth, DensityWeight::X1, 0.0, kExtX1);
+    weighted(smooth, DensityWeight::X2, 0.0, kExtX2);
+    weighted(smooth, DensityWeight::X3, 0.0, kExtX3);
+    weighted(smooth, DensityWeight::X4, 0.0, kExtX4);
+    weighted(smooth, DensityWeight::Central, extended_settings_.central_halfwidth, kExtCentral);
+    weighted(smooth, DensityWeight::DensityLogDensity, 0.0, kExtDensityLogDensity);
+    weighted(raw, DensityWeight::Potential, 0.0, kExtPotential);
     launch_overlap_terms(density_.data(), density_.data(), terms_a_.data(), points_);
     reducer_.sum_into(terms_a_.data() + cut, count, device_sums + kExtDensitySquared);
 
@@ -219,9 +250,15 @@ void Diagnostics1D::enqueue_extended_sums(const cuDoubleComplex* psi,
                           terms_a_.data(), terms_b_.data());
     reducer_.sum_into(terms_a_.data(), site_bins_, device_sums + kExtSiteSquared);
     reducer_.sum_into(terms_b_.data(), site_bins_, device_sums + kExtSiteLog);
-    launch_bin_mass_terms(density_.data(), pixel_starts_.data(), pixel_bins_,
+    // Camera pixels bin the raw density: the binning is the smoothing.
+    launch_bin_mass_terms(raw, pixel_starts_.data(), pixel_bins_,
                           terms_a_.data(), terms_b_.data());
     reducer_.sum_into(terms_a_.data(), pixel_bins_, device_sums + kExtPixelSquared);
+    // 7.0: first and second moments of the 4 um pixel profile (the camera's).
+    launch_bin_moment_terms(raw, pixel_starts_.data(), pixel_centres_.data(),
+                            pixel_bins_, terms_a_.data(), terms_b_.data());
+    reducer_.sum_into(terms_a_.data(), pixel_bins_, device_sums + kExtPixelX1);
+    reducer_.sum_into(terms_b_.data(), pixel_bins_, device_sums + kExtPixelX2);
 
     launch_return_overlap_terms(initial_psi_.data(), psi, terms_a_.data(), terms_b_.data(),
                                 points_);

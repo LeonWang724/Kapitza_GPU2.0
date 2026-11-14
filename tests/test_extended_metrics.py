@@ -187,7 +187,7 @@ class ColumnTests(unittest.TestCase):
         self.assertFalse(set(EXTENDED_FIELDS) & set(csv_fields({})))
         fields = csv_fields({"extended_metrics": em.contract_settings()})
         self.assertEqual(fields[-len(EXTENDED_FIELDS):], EXTENDED_FIELDS)
-        self.assertEqual(len(EXTENDED_SUM_NAMES), 19)
+        self.assertEqual(len(EXTENDED_SUM_NAMES), 21)
 
     def test_columns_are_validated(self):
         record = {"run_index": 3, "extended_metrics": em.empty_columns()}
@@ -219,8 +219,10 @@ class ScanTests(unittest.TestCase):
         self.solver.chmod(0o755)
         self.results = self.root / "results"
 
-    def run_scan(self, inverted, *arguments):
+    def run_scan(self, inverted, *arguments, quasimomentum=0.0, smoothing_um=0.0):
         with (patch.object(runner, "SCRIPT_DIRECTORY", self.core),
+              patch.multiple(runner, INITIAL_QUASIMOMENTUM_KL=quasimomentum,
+                             DensitySmoothing_um=smoothing_um),
               patch.multiple(runner, ExtendedMetrics=True, INVERTED=inverted, NUMBER_OF_TABS=1,
                              LATTICE_DEPTH_V0_ER=10.0, INITIAL_LATTICE_DEPTH_V0_ER=20.0,
                              ALPHA_VALUES=np.array([4.0, 8.0]),
@@ -235,7 +237,7 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(self.run_scan(True, "--batch", "2"), 0)
         manifest = json.loads((self.results / "run_manifest.json").read_text())
         self.assertEqual(manifest["status"], "completed")
-        self.assertEqual(manifest["analysis_contract"]["extended_metrics"]["version"], 1)
+        self.assertEqual(manifest["analysis_contract"]["extended_metrics"]["version"], 2)
         self.assertTrue(manifest["analysis_contract"]["level_statistics"])
         with open(self.results / "metrics.csv", newline="") as handle:
             rows = list(csv.DictReader(handle))

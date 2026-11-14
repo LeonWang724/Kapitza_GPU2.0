@@ -73,6 +73,10 @@ def generate_point_inputs(
     drive_phase = point_drive_phase(grid, alpha)
     if drive_phase is not None:
         extra["drive_phase"] = drive_phase
+    # 7.0 grids record the starting quasimomentum; older generators see no keyword.
+    quasimomentum = float(grid.get("initial_quasimomentum_kl", 0.0))
+    if quasimomentum != 0.0:
+        extra["quasimomentum"] = quasimomentum
     create_initial_state(
         grid["lattice_depth_v0_er"], float(alpha), float(frequency),
         grid.get("phase_radians", 0.0), grid["initial_lattice_depth_v0_er"],
@@ -98,11 +102,14 @@ def phase_dataset_label(
     green_walls: dict | None = None,
     *,
     inverted: bool | None = None,
+    quasimomentum: float = 0.0,
+    smoothing_um: float = 0.0,
 ) -> str:
     """Build the shared descriptive label used by datasets and analysis files.
 
     5.0 scans pass `inverted` and are labelled Inverted or NonInverted; 4.0
-    scans keep the position phase in the label.
+    scans keep the position phase in the label. 7.0 adds the starting
+    quasimomentum and the density smoothing when they are not 0.
     """
     if inverted is None:
         start = f"Phase_{parameter_token(phase_radians)}rad"
@@ -119,6 +126,10 @@ def phase_dataset_label(
             f"S{parameter_token(green_walls['sigma_um'])}um_"
             f"G{parameter_token(green_walls['gap_um'])}um"
         )
+    if quasimomentum:
+        label += f"_Q{parameter_token(quasimomentum)}kL"
+    if smoothing_um:
+        label += f"_Smooth{parameter_token(smoothing_um)}um"
     return label
 
 

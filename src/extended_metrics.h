@@ -33,6 +33,8 @@ enum ExtendedSum {
     kExtMomentumTotal,       // sum |psi_k|^2, whole grid
     kExtMomentumZero,        // sum |psi_k|^2 for |k| < kL
     kExtMomentumSecond,      // sum |psi_k|^2 for kL <= |k| < 3 kL
+    kExtPixelX1,             // 7.0: sum over pixels of (pixel mass) * (pixel centre)
+    kExtPixelX2,             // 7.0: sum over pixels of (pixel mass) * (pixel centre)^2
     kExtendedSumCount,
 };
 
@@ -41,6 +43,7 @@ inline constexpr const char* kExtendedSumNames[kExtendedSumCount] = {
     "central_sum", "rho_log_rho_sum", "rho_squared_sum", "potential_sum",
     "site_squared_sum", "site_log_sum", "pixel_squared_sum",
     "return_real", "return_imag", "momentum_total", "momentum_zero", "momentum_second",
+    "pixel_x1_sum", "pixel_x2_sum",
 };
 
 // Lengths in solver units.
@@ -53,11 +56,38 @@ struct ExtendedSettings {
 
 constexpr double kExtendedPi = 3.141592653589793238462643383279502884;
 
+// 7.0 density smoothing: |psi|^2 is replaced by its average over a window of
+// 2 h + 1 grid points (about `width`) before the position metrics. Returns h;
+// 0 for no smoothing. extended_metrics.smoothing_half_width() is the same.
+inline int smoothing_half_width(double width, double step_x) {
+    if (!(width > 0.0)) return 0;
+    const double ratio = 0.5 * width / step_x;
+    const long half = std::lround(ratio);
+    if (!std::isfinite(ratio) || half < 1) {
+        throw std::runtime_error("density_smoothing_width must cover at least 3 grid points.");
+    }
+    return static_cast<int>(half);
+}
+
 // Bins are the intervals [offset + s width, offset + (s + 1) width) of x that
-// meet the cropped window. Returns the first grid index of every bin followed
-// by points - cut, so bin b covers [starts[b], starts[b + 1]).
-inline std::vector<int> bin_starts(int points, int cut, double step_x, double width,
-                                   double offset) {
+// meet the cropped window. starts holds the first grid index of every bin
+// followed by points - cut, so bin b covers [starts[b], starts[b + 1]);
+// centres[b] = offset + (s + 1/2) width is the nominal centre of that bin.
+struct BinLayout {
+    std::vector<int> starts;
+    std::vector<double> centres;
+};
+
+// Separate statements keep compilers from fusing the multiply and add, so the
+// values round exactly as in extended_metrics.py.
+inline double bin_centre(long bin, double width, double offset) {
+    const double scaled = (static_cast<double>(bin) + 0.5) * width;
+    const double centre = offset + scaled;
+    return centre;
+}
+
+inline BinLayout bin_layout(int points, int cut, double step_x, double width,
+                            double offset) {
     if (cut < 0 || points <= 2 * cut) {
         throw std::runtime_error("The spatial cut removes all grid points.");
     }
@@ -71,7 +101,7 @@ inline std::vector<int> bin_starts(int points, int cut, double step_x, double wi
     };
     const long first_bin = static_cast<long>(std::floor((position(cut) - offset) / width));
     const long last_bin = static_cast<long>(std::floor((position(end - 1) - offset) / width));
-    std::vector<int> starts{cut};
+    BinLayout layout{{cut}, {bin_centre(first_bin, width, offset)}};
     for (long bin = first_bin + 1; bin <= last_bin; ++bin) {
         // Separate statements keep compilers from fusing the multiply and add,
         // so the edges round exactly as in extended_metrics.py.
@@ -81,10 +111,21 @@ inline std::vector<int> bin_starts(int points, int cut, double step_x, double wi
         int index = static_cast<int>(std::ceil(grid + half));
         if (index < cut) index = cut;
         if (index > end) index = end;
-        if (index > starts.back()) starts.push_back(index);
+        if (index > layout.starts.back()) {
+            layout.starts.push_back(index);
+            layout.centres.push_back(bin_centre(bin, width, offset));
+        } else {
+            // The previous bin holds no grid point: the bin starting there is this one.
+            layout.centres.back() = bin_centre(bin, width, offset);
+        }
     }
-    starts.push_back(end);
-    return starts;
+    layout.starts.push_back(end);
+    return layout;
+}
+
+inline std::vector<int> bin_starts(int points, int cut, double step_x, double width,
+                                   double offset) {
+    return bin_layout(points, cut, step_x, width, offset).starts;
 }
 
 // One row per status iteration: the iteration, the drive factor

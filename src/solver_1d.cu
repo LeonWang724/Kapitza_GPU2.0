@@ -145,6 +145,10 @@ SolverResult run_reference_solver_1d(const ConfigData& config,
         throw std::runtime_error(
             "Extended metrics need the fused solver loop; do not pass --reference-loop.");
     }
+    if (config.density_smoothing_width > 0.0) {
+        throw std::runtime_error(
+            "Density smoothing needs the fused solver loop; do not pass --reference-loop.");
+    }
     const bool compact = !config.phase_metric_file.empty();
     std::optional<PhaseMetricAccumulator> phase_metric;
     if (compact) {
@@ -380,7 +384,8 @@ public:
         for (int system = 0; system < systems_; ++system) {
             const ConfigData& config = configs_[system];
             diagnostics_.push_back(std::make_unique<Diagnostics1D>(
-                points_, shape_.step_x, shape_.beta, extended_));
+                points_, shape_.step_x, shape_.beta, extended_,
+                smoothing_half_width(config.density_smoothing_width, shape_.step_x)));
             diagnostics_.back()->capture_initial_density(psi_at(system));
             if (extended_) {
                 diagnostics_.back()->configure_extended(

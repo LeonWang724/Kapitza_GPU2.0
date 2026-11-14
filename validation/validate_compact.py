@@ -16,7 +16,8 @@ import tables as tb
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "phase_diagram" / "simulation_core"))
 from cuda_workflow_common import locate_executable, query_json, run_logged, write_json_atomic
-from phase_metric import METRIC_NAME, STATISTICS_FIELDS, statistics_columns, statistics_from_probabilities, validate_summary
+from phase_metric import (METRIC_NAME, STATISTICS_FIELDS, smooth_density, smoothing_half_width,
+                          statistics_columns, statistics_from_probabilities, validate_summary)
 
 
 def write_state(path: Path, values: np.ndarray) -> None:
@@ -54,6 +55,10 @@ def compare_case(executable: Path, work: Path, case: dict, device: int) -> dict:
         "phase_metric_final_snapshot_count": case["window"],
         "phase_metric_cut_points_each_edge": case["cut"],
     }
+    # 7.0: the compact metric of a smoothed |psi|^2; NumPy smooths the snapshots alike.
+    half = smoothing_half_width(case.get("smoothing", 0.0), step)
+    if half:
+        config["density_smoothing_width"] = case["smoothing"]
     for mode in ("full", "compact"):
         directory = work / mode
         directory.mkdir()
@@ -78,7 +83,7 @@ def compare_case(executable: Path, work: Path, case: dict, device: int) -> dict:
     def probabilities():
         for snapshot in selected:
             with tb.open_file(snapshot, "r") as handle:
-                yield handle.root.REAL[:] ** 2 + handle.root.IMAGINARY[:] ** 2
+                yield smooth_density(handle.root.REAL[:] ** 2 + handle.root.IMAGINARY[:] ** 2, half)
     reference_statistics = statistics_from_probabilities(probabilities(), cut=case["cut"], step_x=step)
     reference = reference_statistics["metric"]
     summary = json.loads((work / "compact" / "metric.json").read_text())
@@ -118,7 +123,8 @@ def main() -> int:
     arguments = parser.parse_args()
     executable = locate_executable(arguments.executable)
     build = query_json(executable, "--version-json")
-    if build.get("compact_phase_metric_version") != 1 or build.get("phase_statistics_version") != 1:
+    if build.get("compact_phase_metric_version") != 1 or build.get("phase_statistics_version") != 1 \
+            or build.get("density_smoothing_version") != 1:
         raise RuntimeError("Rebuild with BUILD_CUDA.bat before validating compact output.")
     timestamp = datetime.now(timezone.utc).strftime("compact_%Y%m%dT%H%M%S%fZ")
     results = (arguments.results or ROOT / "validation" / "results" / timestamp).resolve()
@@ -133,6 +139,11 @@ def main() -> int:
         {"name": "zero_mass", "iterations": 9, "interval": 4, "window": 30, "cut": 0, "zero_state": True},
         {"name": "translated_narrow", "iterations": 13, "interval": 4, "window": 30,
          "cut": 5, "translated_narrow": True},
+        # 7.0 density smoothing over 13 grid points.
+        {"name": "smoothed_final_30", "iterations": 347, "interval": 10, "window": 30, "cut": 5,
+         "smoothing": 3.0},
+        {"name": "smoothed_translated_narrow", "iterations": 13, "interval": 4, "window": 30,
+         "cut": 5, "translated_narrow": True, "smoothing": 3.0},
     ]
     with tempfile.TemporaryDirectory(prefix=".check_", dir=results) as temporary:
         try:

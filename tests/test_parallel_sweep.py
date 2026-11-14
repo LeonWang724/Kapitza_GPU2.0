@@ -29,6 +29,11 @@ from make_phase_diagram_CUDA import analyze
 from phase_metric import METRIC_NAME
 
 
+# The 6.0 settings: these scans test tabs, batches and merging, not the 7.0
+# quasimomentum, smoothing and extended metrics, which have their own tests.
+SETTINGS_6 = {"ExtendedMetrics": False, "INITIAL_QUASIMOMENTUM_KL": 0.0, "DensitySmoothing_um": 0.0}
+
+
 # A stand-in executable exercises real Python subprocesses, configs and files.
 # It does no numerical evolution and is not a CUDA performance benchmark.
 FAKE_SOLVER = '''#!/usr/bin/env python3
@@ -37,7 +42,7 @@ from pathlib import Path
 if "--version-json" in sys.argv:
     print(json.dumps({"compact_phase_metric_version": 1, "phase_statistics_version": 1,
                       "fused_solver_version": 1, "drive_phase_version": 1,
-                      "extended_metrics_version": 1,
+                      "extended_metrics_version": 2, "density_smoothing_version": 1,
                       "max_batch_systems": 64})); raise SystemExit(0)
 if "--device-info" in sys.argv:
     print(json.dumps({"device_index": 0, "name": "Test solver"})); raise SystemExit(0)
@@ -85,22 +90,26 @@ def solve(config):
         import numpy as np, tables as tb
         sys.path.insert(0, os.environ["KAPITZA_CORE"])
         from extended_metrics import SERIES_COLUMNS, reference_extended_sums
+        from phase_metric import smooth_density, smoothing_half_width
         def load(path):
             with tb.open_file(path) as handle:
                 return handle.root.REAL[:] + 1j * handle.root.IMAGINARY[:]
         psi, potential = load(config["initial_state_file"]), load(config["potential_file"])
         step = float(config["step_x"])
+        half = smoothing_half_width(float(config.get("density_smoothing_width", 0.0)), step)
         sums = reference_extended_sums(
             psi, psi, potential, cut=int(config["phase_metric_cut_points_each_edge"]),
             step_x=step,
             lattice_wavevector=float(config["extended_metrics_lattice_wavevector"]),
             central_halfwidth=float(config["extended_metrics_central_halfwidth"]),
             site_offset=float(config["extended_metrics_site_offset"]),
-            pixel_width=float(config["extended_metrics_pixel_width"]))
+            pixel_width=float(config["extended_metrics_pixel_width"]),
+            smoothing_half_width=half)
         density = np.abs(psi) ** 2
         fft = np.fft.fft(psi)
         k2 = (2 * math.pi * np.fft.fftfreq(psi.size, d=step)) ** 2
-        fixed = [step * density.sum(), np.sum(k2 * np.abs(fft) ** 2), np.sum(density ** 2)]
+        fixed = [step * density.sum(), np.sum(k2 * np.abs(fft) ** 2),
+                 np.sum(smooth_density(density, half) ** 2)]
         every = int(float(config.get("show_stats_every_nth_iteration", stride)))
         with open(config["extended_metrics_file"], "w") as out:
             out.write(";".join(SERIES_COLUMNS) + "\\n")
@@ -223,6 +232,7 @@ class ParallelIntegrationTests(unittest.TestCase):
             with self.base.open("a") as stream:
                 stream.write("test_fail=true\n")
         with (patch.object(runner, "SCRIPT_DIRECTORY", self.core),
+              patch.multiple(runner, **SETTINGS_6),
               patch.object(runner, "NUMBER_OF_TABS", tabs),
               patch.object(runner, "POINTS_PER_BATCH", batch),
               patch.object(runner, "ALPHA_VALUES", np.linspace(1, 3, alpha_count)),

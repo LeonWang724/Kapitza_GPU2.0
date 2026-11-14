@@ -3,8 +3,9 @@
 Three sources fill the columns when ExtendedMetrics = True:
   * the GPU simulation itself (no prefix), from sums the solver records at
     every status iteration (every 100 steps);
-  * a q = 0 Floquet model (prefix q0_): the same Hamiltonian for one lattice
-    site's Bloch state, sampled once per drive period (stroboscopically);
+  * a Bloch-state Floquet model (prefix q0_, from 6.0 where q was always 0):
+    the same Hamiltonian for the starting Bloch state at the scan's initial
+    quasimomentum, sampled once per drive period (stroboscopically);
   * a classical ensemble (prefix cl_): point particles in the same lattice.
 "final window" is the window of the existing metric: the last 30 samples.
 """
@@ -20,6 +21,7 @@ EXTENDED_SUM_NAMES = (
     "central_sum", "rho_log_rho_sum", "rho_squared_sum", "potential_sum",
     "site_squared_sum", "site_log_sum", "pixel_squared_sum",
     "return_real", "return_imag", "momentum_total", "momentum_zero", "momentum_second",
+    "pixel_x1_sum", "pixel_x2_sum",
 )
 
 GPU_FIELDS = {
@@ -40,7 +42,7 @@ GPU_FIELDS = {
     "site_ipr": "IPR of the lattice-site populations",
     "occupied_sites": "Number of occupied lattice sites, 1 / site_ipr",
     "site_entropy": "Shannon entropy of the lattice-site populations (nats)",
-    "coarse_ipr": "IPR on 4 um pixels (like the camera)",
+    "coarse_ipr": "IPR on 4 um pixels, as MuscleMuseum's computeIPR (like the camera)",
     "metric_initial": "IPR (metric) at the first status step",
     "return_probability": "Return probability |<psi_0|psi>|^2",
     "density_overlap": "Density overlap with the start, sum rho_0 rho / sum rho_0^2",
@@ -48,24 +50,25 @@ GPU_FIELDS = {
     "order_0": "Fraction with |p| < hbar kL (zeroth diffraction order)",
     "order_2": "Fraction with hbar kL <= |p| < 3 hbar kL (+-2 hbar kL orders)",
     "energy_absorbed_er": "Energy absorbed in the time-averaged lattice, final - initial (E_R)",
+    "sigma_x_4um_um": "7.0: cloud width from 4 um pixels, as MuscleMuseum's computeStDev (um)",
 }
 
 Q0_FIELDS = {
-    "q0_pendulum_cos": "q=0 model: pendulum angle <cos 2kL x>, stroboscopic",
-    "q0_onsite_spread": "q=0 model: on-site spread 1 - |<exp(2i kL x)>|, stroboscopic",
-    "q0_p_squared": "q=0 model: <p^2> in (hbar kL)^2",
-    "q0_order_0": "q=0 model: population of the p = 0 order",
-    "q0_order_2": "q=0 model: population of the +-2 hbar kL orders",
-    "q0_energy_absorbed_er": "q=0 model: energy absorbed in the time-averaged lattice (E_R)",
-    "q0_onsite_survival": "q=0 model: probability still in the starting on-site state",
-    "q0_band0_population": "q=0 model: population of the lowest band of the time-averaged lattice",
-    "q0_start_band_population": "q=0 model: population of the band that held most atoms at t = 0",
-    "q0_excited_band_population": "q=0 model: population of bands 2 and up (counting from 0)",
-    "q0_band_change": "q=0 model: change of the band populations from t = 0 (0 to 1)",
-    "q0_floquet_participation": "q=0 model: number of Floquet states the start spreads over",
-    "q0_slow_frequency_khz": "q=0 model: main frequency of the pendulum angle (kHz)",
-    "q0_slow_frequency_omega0": "q=0 model: that frequency over f0, the lattice's harmonic frequency",
-    "q0_echo_fidelity": "q=0 model: overlap at the end with a run at alpha * 1.01 (echo)",
+    "q0_pendulum_cos": "Bloch-state model: pendulum angle <cos 2kL x>, stroboscopic",
+    "q0_onsite_spread": "Bloch-state model: on-site spread 1 - |<exp(2i kL x)>|, stroboscopic",
+    "q0_p_squared": "Bloch-state model: <p^2> in (hbar kL)^2",
+    "q0_order_0": "Bloch-state model: population of the p = 0 order",
+    "q0_order_2": "Bloch-state model: population of the +-2 hbar kL orders",
+    "q0_energy_absorbed_er": "Bloch-state model: energy absorbed in the time-averaged lattice (E_R)",
+    "q0_onsite_survival": "Bloch-state model: probability still in the starting on-site state",
+    "q0_band0_population": "Bloch-state model: population of the lowest band of the time-averaged lattice",
+    "q0_start_band_population": "Bloch-state model: population of the band that held most atoms at t = 0",
+    "q0_excited_band_population": "Bloch-state model: population of bands 2 and up (counting from 0)",
+    "q0_band_change": "Bloch-state model: change of the band populations from t = 0 (0 to 1)",
+    "q0_floquet_participation": "Bloch-state model: number of Floquet states the start spreads over",
+    "q0_slow_frequency_khz": "Bloch-state model: main frequency of the pendulum angle (kHz)",
+    "q0_slow_frequency_omega0": "Bloch-state model: that frequency over f0, the lattice's harmonic frequency",
+    "q0_echo_fidelity": "Bloch-state model: overlap at the end with a run at alpha * 1.01 (echo)",
 }
 
 CLASSICAL_FIELDS = {

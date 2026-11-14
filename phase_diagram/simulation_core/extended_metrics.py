@@ -28,7 +28,7 @@ from level_statistics import (
 
 WAVELENGTH_M = 1064e-9
 CENTRAL_HALFWIDTH_M = 2.0 * ENVELOPE_SIGMA_M      # two initial cloud widths, 60 um
-PIXEL_M = 4e-6                                     # coarse graining, like the camera
+PIXEL_M = 4e-6                                     # 7.0 smoothing: camera pixels, as MuscleMuseum
 Q0_PLANE_WAVE_CUTOFF = 40
 ECHO_RELATIVE_CHANGE = 0.01
 CLASSICAL_PARTICLES = 128
@@ -42,7 +42,7 @@ SERIES_COLUMNS = ("iteration", "drive", "norm", "kinetic_sum", "density_overlap"
 def contract_settings() -> dict:
     """The extended-metric settings recorded in the run manifest."""
     return {
-        "version": 1,
+        "version": 2,   # 7.0: the 4 um pixel moments (sigma_x_4um_um)
         "central_halfwidth_um": CENTRAL_HALFWIDTH_M * 1e6,
         "pixel_um": PIXEL_M * 1e6,
         "q0_plane_wave_cutoff": Q0_PLANE_WAVE_CUTOFF,
@@ -85,6 +85,17 @@ def solver_settings(grid: dict, alpha: float) -> dict:
 
 def bin_starts(points: int, cut: int, step_x: float, width: float, offset: float) -> np.ndarray:
     """Same as bin_starts() in src/extended_metrics.h."""
+    return bin_layout(points, cut, step_x, width, offset)[0]
+
+
+def bin_centre(bin_index: int, width: float, offset: float) -> float:
+    return offset + (float(bin_index) + 0.5) * width
+
+
+def bin_layout(points: int, cut: int, step_x: float, width: float,
+               offset: float) -> tuple[np.ndarray, np.ndarray]:
+    """Same as bin_layout() in src/extended_metrics.h: the first grid index of
+    every bin followed by points - cut, and each bin's nominal centre."""
     if cut < 0 or points <= 2 * cut:
         raise ValueError("The spatial cut removes all grid points.")
     if not step_x > 0.0 or not width > step_x or not math.isfinite(offset):
@@ -97,44 +108,56 @@ def bin_starts(points: int, cut: int, step_x: float, width: float, offset: float
 
     first_bin = math.floor((position(cut) - offset) / width)
     last_bin = math.floor((position(end - 1) - offset) / width)
-    starts = [cut]
+    starts, centres = [cut], [bin_centre(first_bin, width, offset)]
     for bin_index in range(first_bin + 1, last_bin + 1):
         edge = offset + float(bin_index) * width
         index = min(max(int(math.ceil(edge / step_x + half)), cut), end)
         if index > starts[-1]:
             starts.append(index)
+            centres.append(bin_centre(bin_index, width, offset))
+        else:   # the previous bin holds no grid point: the bin starting there is this one
+            centres[-1] = bin_centre(bin_index, width, offset)
     starts.append(end)
-    return np.array(starts, dtype=np.int64)
+    return np.array(starts, dtype=np.int64), np.array(centres, dtype=float)
 
 
 def reference_extended_sums(psi, initial_psi, potential, *, cut: int, step_x: float,
                             lattice_wavevector: float, central_halfwidth: float,
                             site_offset: float, pixel_width: float,
-                            absolute: bool = False) -> np.ndarray:
+                            absolute: bool = False, smoothing_half_width: int = 0) -> np.ndarray:
     """The solver's raw extended sums for one state, in the order of EXTENDED_SUM_NAMES.
 
     absolute=True sums the magnitudes of the same terms instead: the scale of
     the rounding error of each sum, which stays finite where the sum itself
     cancels to zero (odd moments of a symmetric cloud).
+
+    smoothing_half_width (7.0): |psi|^2 averaged over 2 h + 1 points, as the
+    solver does, except for <cos/sin 2kL x>, <V> and the 4 um pixel bins,
+    which use the raw density.
     """
+    from phase_metric import smooth_density
+
     psi = np.asarray(psi, dtype=complex)
     points = psi.size
-    rho = psi.real ** 2 + psi.imag ** 2
+    raw = psi.real ** 2 + psi.imag ** 2
+    rho = smooth_density(raw, smoothing_half_width)
     window = slice(cut, points - cut)
     x = (np.arange(points) - points // 2).astype(float) * step_x
     r, xw = rho[window], x[window]
+    r_raw = raw[window]
     keep = np.abs if absolute else (lambda values: values)
     with np.errstate(divide="ignore", invalid="ignore"):
         rho_log = np.where(r > 0.0, r * np.log(np.where(r > 0.0, r, 1.0)), 0.0)
 
-    def bins(width, offset):
-        starts = bin_starts(points, cut, step_x, width, offset)
-        mass = np.add.reduceat(rho[:starts[-1]], starts[:-1])
+    def bins(width, offset, density):
+        starts, centres = bin_layout(points, cut, step_x, width, offset)
+        mass = np.add.reduceat(density[:starts[-1]], starts[:-1])
         logs = np.where(mass > 0.0, mass * np.log(np.where(mass > 0.0, mass, 1.0)), 0.0)
-        return float(np.sum(mass ** 2)), float(np.sum(keep(logs)))
+        moments = (float(np.sum(keep(mass * centres))), float(np.sum(mass * centres ** 2)))
+        return float(np.sum(mass ** 2)), float(np.sum(keep(logs))), moments
 
-    site_squared, site_log = bins(math.pi / lattice_wavevector, site_offset)
-    pixel_squared, _ = bins(pixel_width, -0.5 * pixel_width)
+    site_squared, site_log, _ = bins(math.pi / lattice_wavevector, site_offset, rho)
+    pixel_squared, _, (pixel_x1, pixel_x2) = bins(pixel_width, -0.5 * pixel_width, raw)
     initial = np.asarray(initial_psi, dtype=complex)
     if absolute:
         magnitude = float(np.sum(np.abs(initial) * np.abs(psi)))
@@ -147,15 +170,17 @@ def reference_extended_sums(psi, initial_psi, potential, *, cut: int, step_x: fl
     kl2 = lattice_wavevector ** 2
     two_k = 2.0 * lattice_wavevector
     return np.array([
-        np.sum(r), np.sum(keep(r * np.cos(two_k * xw))), np.sum(keep(r * np.sin(two_k * xw))),
+        np.sum(r), np.sum(keep(r_raw * np.cos(two_k * xw))),
+        np.sum(keep(r_raw * np.sin(two_k * xw))),
         np.sum(keep(r * xw)), np.sum(r * xw * xw), np.sum(keep(r * xw * xw * xw)),
         np.sum(r * (xw * xw) * (xw * xw)),
         np.sum(np.where((xw < central_halfwidth) & (xw > -central_halfwidth), r, 0.0)),
         np.sum(keep(rho_log)), np.sum(r * r),
-        np.sum(keep(r * np.real(np.asarray(potential))[window])),
+        np.sum(keep(r_raw * np.real(np.asarray(potential))[window])),
         site_squared, site_log, pixel_squared, overlap.real, overlap.imag,
         np.sum(power), np.sum(np.where(k2 < kl2, power, 0.0)),
         np.sum(np.where((k2 >= kl2) & (k2 < 9.0 * kl2), power, 0.0)),
+        pixel_x1, pixel_x2,
     ], dtype=float)
 
 
@@ -229,6 +254,9 @@ def series_quantities(series: dict, config: dict) -> dict:
                   + 6.0 * mean_x ** 2 * ex2 - 3.0 * mean_x ** 4)
         orientation = (series["cos_sum"] + 1j * series["sin_sum"]) / mass
         site_ipr = series["site_squared_sum"] / mass ** 2
+        # 7.0: the same width from the 4 um pixel profile, as MuscleMuseum's StdDev.
+        pixel_mean = series["pixel_x1_sum"] / mass
+        pixel_variance = series["pixel_x2_sum"] / mass - pixel_mean ** 2
         norm0 = series["norm"][0]
         total = series["momentum_total"]
         return {
@@ -238,6 +266,7 @@ def series_quantities(series: dict, config: dict) -> dict:
             "sigma_um": np.sqrt(np.where(variance > 0.0, variance, np.nan))
             * GRID_SPACING_M * 1e6,
             "kurtosis": fourth / variance ** 2,
+            "pixel_variance": pixel_variance,
             "central_fraction": series["central_sum"] / mass,
             "density_entropy": np.log(mass) - series["rho_log_rho_sum"] / mass,
             "site_ipr": site_ipr,
@@ -291,6 +320,8 @@ def gpu_summary(path: Path, config: dict, contract: dict) -> dict:
         "escape_fraction": finite_or_none(1.0 - values["norm"][-1] / values["norm"][0]),
         "density_entropy": _mean(values["density_entropy"], final),
         "kurtosis": _mean(values["kurtosis"], final),
+        # Time mean of the variance over the final window, then the root, like sigma_x.
+        "sigma_x_4um_um": _root_um(_mean(values["pixel_variance"], final)),
         "site_ipr": _mean(values["site_ipr"], final),
         "occupied_sites": _mean(values["occupied_sites"], final),
         "site_entropy": _mean(values["site_entropy"], final),
@@ -304,6 +335,13 @@ def gpu_summary(path: Path, config: dict, contract: dict) -> dict:
         "energy_absorbed_er": _difference(_mean(values["energy_er"], final),
                                           values["energy_er"][0]),
     }
+
+
+def _root_um(variance):
+    """sqrt of a variance in solver length units^2, in um."""
+    if variance is None or variance < 0.0:
+        return None
+    return finite_or_none(math.sqrt(variance) * GRID_SPACING_M * 1e6)
 
 
 def _difference(final, initial):
@@ -352,14 +390,22 @@ def harmonic_frequency_hz(depth_er: float) -> float:
 
 def floquet_q0_metrics(depth_er, initial_depth_er, alpha, frequency_hz, drive_phase,
                        hold_s, window_s, *, n_max=Q0_PLANE_WAVE_CUTOFF,
-                       echo=ECHO_RELATIVE_CHANGE) -> dict:
-    """q0_ columns: one site's Bloch state (q = 0), sampled once per drive period."""
+                       echo=ECHO_RELATIVE_CHANGE, quasimomentum=0.0) -> dict:
+    """q0_ columns: the starting Bloch state at quasimomentum q (units of kL;
+    the name is from 6.0, where q = 0), sampled once per drive period.
+
+    q = 0 works in the even parity sector, exactly as 6.0; any other q needs
+    the whole plane-wave basis exp(i (2n + q) kL x), about 8 times slower.
+    """
+    q = float(quasimomentum)
+    if not -1.0 < q < 1.0:
+        raise ValueError("The quasimomentum must satisfy -1 < q < 1 (units of kL).")
     omega = 2.0 * math.pi * frequency_hz * HBAR / E_R          # in E_R / hbar
-    static, drive = lattice_matrices(-depth_er, alpha, 0.0, n_max)
-    even = symmetry_sectors(n_max, 0.0)[0]
+    static, drive = lattice_matrices(-depth_er, alpha, q, n_max)
+    even = symmetry_sectors(n_max, q)[0]    # the even sector at q = 0, else everything
     loading = -initial_depth_er * (1.0 + alpha * math.sin(drive_phase))
     *_, coefficients = bloch_state_1d_plane_wave(
-        V0=loading, q=0.0, band_index=0, xarr=np.linspace(0.0, math.pi, 8), n_pw=n_max)
+        V0=loading, q=q, band_index=0, xarr=np.linspace(0.0, math.pi, 8), n_pw=n_max)
     start = even.T @ coefficients
     if abs(np.linalg.norm(start) - 1.0) > 1e-8:
         raise RuntimeError("The starting Bloch state is not even under parity.")
@@ -398,7 +444,7 @@ def floquet_q0_metrics(depth_er, initial_depth_er, alpha, frequency_hz, drive_ph
             peak = int(np.argmax(spectrum[1:])) + 1
             frequency_khz = np.fft.rfftfreq(signal.size, d=1.0 / frequency_hz)[peak] / 1e3
 
-    _, drive_echo = lattice_matrices(-depth_er, alpha * (1.0 + echo), 0.0, n_max)
+    _, drive_echo = lattice_matrices(-depth_er, alpha * (1.0 + echo), q, n_max)
     unitary_echo = floquet_operator_phased(s_even, even.T @ drive_echo @ even, omega,
                                            drive_phase, steps)
     echo_state = start.copy()
@@ -408,7 +454,7 @@ def floquet_q0_metrics(depth_er, initial_depth_er, alpha, frequency_hz, drive_ph
     return {
         "q0_pendulum_cos": finite_or_none(orientation.real[final].mean()),
         "q0_onsite_spread": finite_or_none((1.0 - np.abs(orientation[final])).mean()),
-        "q0_p_squared": finite_or_none((weights[final] @ (2.0 * n) ** 2).mean()),
+        "q0_p_squared": finite_or_none((weights[final] @ (2.0 * n + q) ** 2).mean()),
         "q0_order_0": finite_or_none(weights[final, n_max].mean()),
         "q0_order_2": finite_or_none((weights[final, n_max - 1] + weights[final, n_max + 1]).mean()),
         "q0_energy_absorbed_er": finite_or_none(energy[final].mean() - energy[0]),

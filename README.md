@@ -1,4 +1,59 @@
-# Kapitza_GPU6.0
+# Kapitza_GPU7.0
+
+Version 7.0 keeps everything of 6.0 and adds two settings in
+`phase_diagram/simulation_core/run_phase_diagram_CUDA.py`. Setting both to 0
+gives exactly the 6.0 results.
+
+```python
+INITIAL_QUASIMOMENTUM_KL = 0.1   # starting quasimomentum of every atom, hbar kL
+DensitySmoothing_um = 4.0        # smoothing of |psi|^2, like the camera's pixels
+```
+
+**Starting quasimomentum.** Every atom starts in the lowest-band Bloch state at
+q (units of kL, -1 < q < 1) under the 30 um Gaussian envelope, instead of q = 0.
+One setting serves every model: the GPU run, the Bloch-state Floquet model
+(the `q0_` columns keep their 6.0 names; they now use this q) and the level
+statistics. The classical ensemble has no quasimomentum. A single q > 0 makes
+the cloud drift; widths are measured about its moving centre. At q != 0 the
+Bloch-state model needs every plane wave, about three times the CPU time.
+
+**Density smoothing.** The solver averages |psi|^2 over 175 grid points
+(4.025 um) before every position metric: the IPR (`metric`), the cloud width
+and centre (`sigma_x`, `x_mean`, ...), the density overlap and the extended
+position columns (width growth and spreading speed, central fraction,
+entropies, kurtosis, lattice-site IPR and occupied sites). Four kinds of
+columns keep the raw density, because smoothing cannot apply to them:
+
+- the pendulum angle and on-site spread (`pendulum_cos`, `onsite_spread` and
+  their stroboscopic and time-fluctuation versions): they resolve where atoms
+  sit inside a 532 nm site, which a 4 um window averages to about 0. A camera
+  cannot see them either;
+- the potential-energy part of `energy_absorbed_er`, for the same reason;
+- momentum-space columns (`p_squared`, `order_0`, `order_2`) and the
+  return probability (an overlap of wavefunctions, not an image);
+- the 4 um pixel columns below (binning into pixels is itself the smoothing).
+
+**4 um pixel columns** (MuscleMuseum's definitions on 4 um camera pixels):
+`coarse_ipr` (computeIPR, from 6.0) and the new `sigma_x_4um_um`
+(computeStDev).
+
+Build and validate on the Windows machine, as for 6.0:
+
+```powershell
+.\BUILD_CUDA.bat
+.\VALIDATE_FAST_CUDA.bat
+.\VALIDATE_COMPACT_CUDA.bat
+.\VALIDATE_EXTENDED_CUDA.bat
+```
+
+`VALIDATE_COMPACT_CUDA.bat` adds two smoothed cases (the GPU's smoothed IPR and
+width against NumPy on the saved snapshots). `VALIDATE_EXTENDED_CUDA.bat` runs
+one batch with the 7.0 settings (4 um smoothing, q = 0.1) and one with the 6.0
+settings, and checks every sum against NumPy. Smoothing needs the fused loop;
+`--reference-loop` is refused while it is on. Full-storage scans
+(`--storage full`) save raw snapshots; MAKE smooths them the same way.
+
+## Version 6.0
 
 Version 6.0 adds **extended metrics**: one switch in
 `phase_diagram/simulation_core/run_phase_diagram_CUDA.py`,

@@ -87,6 +87,54 @@ def csv_row(record: dict, summary: dict, config: dict, contract: dict) -> dict:
     return row
 
 
+# --------------------------------------------------------------------------
+# 7.0 density smoothing (see density_smoothing_width in src/config.h)
+# --------------------------------------------------------------------------
+def smoothing_half_width(width: float, step_x: float) -> int:
+    """Same as smoothing_half_width() in src/extended_metrics.h: the solver
+    averages |psi|^2 over 2 h + 1 grid points; 0 = no smoothing."""
+    if not width > 0.0:
+        return 0
+    ratio = 0.5 * width / step_x
+    if not math.isfinite(ratio) or math.floor(ratio + 0.5) < 1:
+        raise ValueError("density_smoothing_width must cover at least 3 grid points.")
+    return int(math.floor(ratio + 0.5))
+
+
+def smooth_density(density, half_width: int):
+    """|psi|^2 averaged over 2 h + 1 points, zero beyond the grid, as the solver does."""
+    import numpy as np
+
+    density = np.asarray(density, dtype=float)
+    if half_width <= 0:
+        return density
+    window = 2 * half_width + 1
+    return np.convolve(density, np.ones(window), mode="same") / window
+
+
+def smoothing_contract(width_um: float, step_x: float, grid_spacing_m: float) -> dict | None:
+    """Manifest entry for DensitySmoothing_um, or None when it is 0."""
+    if isinstance(width_um, bool) or not isinstance(width_um, (int, float)) \
+            or not math.isfinite(width_um) or width_um < 0:
+        raise ValueError("DensitySmoothing_um must be 0 or a positive number of micrometres.")
+    if width_um == 0:
+        return None
+    width = float(width_um) * 1e-6 / grid_spacing_m
+    half = smoothing_half_width(width, step_x)
+    return {
+        "width_um": float(width_um),
+        "width_solver_units": width,
+        "half_width_points": half,
+        "window_um": (2 * half + 1) * step_x * grid_spacing_m * 1e6,
+        "kernel": "moving average of |psi|^2 over 2 h + 1 grid points, zero beyond the grid",
+        "smoothed": "phase metric (IPR, centre, width), density overlap, and the extended "
+                    "position columns (moments, central fraction, entropies, kurtosis, "
+                    "lattice-site populations)",
+        "raw": "norm, energies, <cos/sin 2kL x> and <V> (inside a lattice site), 4 um pixel "
+               "columns (the binning is the smoothing), momentum and amplitude overlaps",
+    }
+
+
 def statistics_from_probabilities(probabilities, *, cut: int, step_x: float | None) -> dict:
     """Independent snapshot reference using normalized, cropped position weights.
 

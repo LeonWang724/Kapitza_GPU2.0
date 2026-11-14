@@ -23,6 +23,12 @@ void launch_density_weight_terms(const double* density, const cuDoubleComplex* p
 // squares[b] = m_b^2 and logs[b] = m_b log(m_b) (0 for an empty bin).
 void launch_bin_mass_terms(const double* density, const int* starts, int bins,
                            double* squares, double* logs);
+// 7.0: first[b] = m_b * centres[b] and second[b] = m_b * centres[b]^2.
+void launch_bin_moment_terms(const double* density, const int* starts, const double* centres,
+                             int bins, double* first, double* second);
+// 7.0: output[j] = sum of input[i] for |i - j| <= half_width (inside the
+// grid), divided by 2 half_width + 1: a moving average, zero beyond the grid.
+void launch_box_smooth(const double* input, double* output, int points, int half_width);
 // real[j] + i imag[j] = conj(initial[j]) * psi[j].
 void launch_return_overlap_terms(const cuDoubleComplex* initial, const cuDoubleComplex* psi,
                                  double* real, double* imag, int points);

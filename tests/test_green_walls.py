@@ -27,7 +27,7 @@ import create_initial_state_function as generator
 import run_phase_diagram_CUDA as runner
 from cuda_workflow_common import phase_dataset_label
 from make_phase_diagram_CUDA import automatic_plot_title, grid_parameter_label
-from test_parallel_sweep import FAKE_SOLVER
+from test_parallel_sweep import FAKE_SOLVER, SETTINGS_6
 
 WALLS = {"height_er": 100.0, "sigma_um": 5.0, "gap_um": 200.0}
 X = np.arange(-generator.GRID_POINTS // 2, generator.GRID_POINTS // 2) * generator.GRID_SPACING_M
@@ -105,7 +105,7 @@ class GeneratorTests(unittest.TestCase):
 
 class RunnerTests(unittest.TestCase):
     def plan(self, **settings) -> str:
-        with (patch.multiple(runner, **settings),
+        with (patch.multiple(runner, **{**SETTINGS_6, **settings}),
               patch.object(runner, "locate_executable") as locate,
               patch.object(sys, "argv", ["runner", "--plan"]),
               contextlib.redirect_stdout(io.StringIO()) as output):
@@ -124,7 +124,7 @@ class RunnerTests(unittest.TestCase):
         for settings in ({"GreenWalls": "yes"}, {"GreenWalls": 1},
                          {"GreenWalls": True, "GreenWallSigma_um": 0.0},
                          {"GreenWalls": True, "GreenWallGap_um": 5000.0}):
-            with (patch.multiple(runner, **settings),
+            with (patch.multiple(runner, **{**SETTINGS_6, **settings}),
                   patch.object(runner, "locate_executable") as locate,
                   patch.object(sys, "argv", ["runner", "--plan"]),
                   contextlib.redirect_stderr(io.StringIO())):
@@ -166,6 +166,7 @@ class ScanTests(unittest.TestCase):
 
     def test_full_scan_in_two_tabs_writes_walls_into_every_point(self):
         with (patch.object(runner, "SCRIPT_DIRECTORY", self.core),
+              patch.multiple(runner, **SETTINGS_6),
               patch.multiple(runner, GreenWalls=True, GreenWallHeight_ER=100.0,
                              GreenWallSigma_um=5.0, GreenWallGap_um=200.0, NUMBER_OF_TABS=2,
                              ALPHA_VALUES=np.array([10.0, 20.0]),

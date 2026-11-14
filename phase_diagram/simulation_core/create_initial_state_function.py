@@ -195,6 +195,7 @@ def check_green_walls(height_er, sigma_um, gap_um):
 def create_init_state(
     V0, alpha, nu_flo, phi, initial_lattice_depth_v0_er=None,
     *, output_directory=None, config_path=None, green_walls=None, drive_phase=None,
+    quasimomentum=0.0,
 ):
     # green_walls: None (no walls) or {"height_er", "sigma_um", "gap_um"};
     # see green_wall_potential(). The walls are static, not modulated.
@@ -209,11 +210,16 @@ def create_init_state(
     #   state of the lattice at t = 0 at the initial depth,
     #   -V_init [1 + alpha sin(phi_d)] cos^2(kL x), as they are loaded in the
     #   experiment. Non-inverted: phi_d = 0; inverted: phi_d = arcsin(-2/alpha).
+    #
+    # quasimomentum (7.0): q of the starting Bloch state in units of kL, the
+    #   same for every atom; the default 0 is the BEC at rest of 4.0 to 6.0.
     if drive_phase is not None and phi != 0:
         raise ValueError("The 5.0 drive keeps the lattice fixed; the position phase must be 0.")
+    if isinstance(quasimomentum, bool) or not -1.0 < float(quasimomentum) < 1.0:
+        raise ValueError("The initial quasimomentum must satisfy -1 < q < 1 (units of kL).")
     # Parameters
     #V0 = 10.0          # lattice depth in E_R
-    q = 0.0           # quasimomentum in units of k_L, should lie in [-1, 1)
+    q = float(quasimomentum)   # quasimomentum in units of k_L, -1 < q < 1
     band_index = 0    # 0 = lowest band
     n_pw = 40         # plane waves on each side
     n_x = GRID_POINTS

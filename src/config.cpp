@@ -153,6 +153,8 @@ ConfigData read_config(const std::filesystem::path& config_path) {
         double_value(config.raw_values, "extended_metrics_site_offset", 0.0);
     config.extended_metrics_pixel_width =
         double_value(config.raw_values, "extended_metrics_pixel_width", 0.0);
+    config.density_smoothing_width =
+        double_value(config.raw_values, "density_smoothing_width", 0.0);
     return config;
 }
 
@@ -205,6 +207,17 @@ void validate_1d_config(const ConfigData& config) {
             !(kExtendedPi / config.extended_metrics_lattice_wavevector > config.step_x)) {
             throw std::runtime_error("Invalid extended-metric wavevector, window or pixel.");
         }
+    }
+    if (!(config.density_smoothing_width >= 0.0) ||
+        !std::isfinite(config.density_smoothing_width)) {
+        throw std::runtime_error("density_smoothing_width must be 0 or positive.");
+    }
+    const int half = smoothing_half_width(config.density_smoothing_width, config.step_x);
+    if (half > 0 && 2 * half + 1 >= config.points_x) {
+        throw std::runtime_error("density_smoothing_width is wider than the grid.");
+    }
+    if (half > 0 && config.imaginary_time) {
+        throw std::runtime_error("Density smoothing requires real-time evolution.");
     }
 }
 
@@ -259,6 +272,8 @@ void validate_batch_compatible(const std::vector<ConfigData>& configs) {
                 "extended_metrics_site_offset");
         require(config.extended_metrics_pixel_width == first.extended_metrics_pixel_width,
                 "extended_metrics_pixel_width");
+        require(config.density_smoothing_width == first.density_smoothing_width,
+                "density_smoothing_width");
 
         // Every system writes its own results.
         const auto unique = [&](std::set<std::string>& seen,
