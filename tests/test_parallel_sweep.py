@@ -202,7 +202,8 @@ class PartitionTests(unittest.TestCase):
                                         headless=False, terminal="wt.exe")
         command = launch.call_args.args[0]
         self.assertEqual(command[:4], ["wt.exe", "--window", "Kapitza-test", "new-tab"])
-        self.assertEqual(command[-1], "C:/Scan Folder/run_manifest.json")
+        # Windows writes the same path with backslashes.
+        self.assertEqual(command[-1], str(Path("C:/Scan Folder/run_manifest.json")))
         self.assertNotIn("shell", launch.call_args.kwargs)
 
 
