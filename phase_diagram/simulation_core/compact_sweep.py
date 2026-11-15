@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Callable
 
 from cuda_workflow_common import (
-    SCRIPT_DIRECTORY, generate_point_inputs, grid_points, point_drive_phase, read_config,
-    run_logged, sha256_file, update_config, utc_now, write_json_atomic,
+    SCRIPT_DIRECTORY, generate_point_inputs, grid_points, point_drive_phase, point_grid,
+    read_config, run_logged, sha256_file, update_config, utc_now, write_json_atomic,
 )
 from level_statistics import level_statistics_task
 from phase_metric import csv_fields, csv_row, expected_sampling, validate_summary
@@ -52,6 +52,7 @@ def run_compact_sweep(
     extra_arguments = [str(argument) for argument in solver.get("extra_arguments", [])]
     level_settings = contract.get("level_statistics")
     extended = contract.get("extended_metrics")
+    spread = contract.get("quasimomentum_spread")       # 10.0: None for a single q
     if extended:
         import extended_metrics
     manifest["simulation_config"] = read_config(base_config)
@@ -90,23 +91,30 @@ def run_compact_sweep(
                 records, points = [], []
                 failing_index = batch[0][0]
                 try:
-                    for position, (index, alpha_index, frequency_index, alpha, frequency) in enumerate(batch):
+                    for position, (index, alpha_index, frequency_index, alpha, frequency,
+                                   quasimomentum) in enumerate(batch):
                         failing_index = index
+                        # 10.0: each run sees the grid with its own starting q.
+                        run_grid = point_grid(grid, quasimomentum)
                         record = {
                             "run_index": index, "alpha_index": alpha_index,
                             "frequency_index": frequency_index, "alpha": alpha,
                             "drive_frequency_hz": frequency, "status": "running",
                             "started_utc": utc_now(),
                         }
+                        if spread:
+                            record["quasimomentum_index"] = index % len(spread["values_kl"])
+                            record["initial_quasimomentum_kl"] = quasimomentum
                         if len(batch) > 1:
                             record["solver_batch"] = {"size": len(batch), "position": position,
                                                       "first_run_index": batch[0][0]}
                         records.append(record)
-                        print(f"\n--- Compact CUDA point {index:03d}: alpha={alpha:g}, frequency={frequency:g} Hz ---")
+                        print(f"\n--- Compact CUDA point {index:03d}: alpha={alpha:g}, frequency={frequency:g} Hz"
+                              + (f", q={quasimomentum:g} hbar kL" if spread else "") + " ---")
                         point_work = work / f"point_{position:02d}"
                         config_path = point_work / "run.config"
                         inputs = generate_point_inputs(
-                            base_config, config_path, point_work / "in", grid,
+                            base_config, config_path, point_work / "in", run_grid,
                             alpha, frequency, create_initial_state,
                         )
                         summary_path = point_work / "metric.json"
@@ -128,7 +136,7 @@ def run_compact_sweep(
                             })
                         if extended:  # 6.0: the solver records the extended sums
                             update_config(config_path, {
-                                **extended_metrics.solver_settings(grid, alpha),
+                                **extended_metrics.solver_settings(run_grid, alpha),
                                 "extended_metrics_file": point_work / "extended.csv",
                             })
                         generated = read_config(config_path)
@@ -143,11 +151,14 @@ def run_compact_sweep(
                     # Level statistics need only each point's parameters. They run
                     # in this thread on purpose: numpy's linear algebra can crash a
                     # Windows process when two threads use it at once.
-                    for record, (_, _, _, alpha, frequency) in zip(records, batch):
+                    for record, (_, _, _, alpha, frequency, quasimomentum) in zip(records, batch):
                         if level_settings:
                             failing_index = record["run_index"]
+                            settings = (dict(level_settings, quasimomentum=float(quasimomentum),
+                                             parity_sectors_separated=quasimomentum == 0.0)
+                                        if spread else level_settings)
                             record["level_statistics"] = level_statistics_task(
-                                (grid["lattice_depth_v0_er"], alpha, frequency, level_settings))
+                                (grid["lattice_depth_v0_er"], alpha, frequency, settings))
                     if extended:
                         # 6.0: the q = 0 Floquet model and the classical ensemble
                         # need only the parameters; same thread, as above.
@@ -155,17 +166,17 @@ def run_compact_sweep(
                         depth = float(grid["lattice_depth_v0_er"])
                         initial = float(grid["initial_lattice_depth_v0_er"])
                         parameters = [(alpha, frequency, point_drive_phase(grid, alpha))
-                                      for (_, _, _, alpha, frequency) in batch]
+                                      for (_, _, _, alpha, frequency, _) in batch]
                         classical = extended_metrics.classical_metrics(
                             parameters, depth, initial, hold, window)
-                        for record, (alpha, frequency, phase), columns in zip(
-                                records, parameters, classical):
+                        for record, (alpha, frequency, phase), columns, point in zip(
+                                records, parameters, classical, batch):
                             failing_index = record["run_index"]
                             record["extended_metrics"] = {
                                 **extended_metrics.empty_columns(),
                                 **extended_metrics.floquet_q0_metrics(
                                     depth, initial, alpha, frequency, phase, hold, window,
-                                    quasimomentum=float(grid.get("initial_quasimomentum_kl", 0.0))),
+                                    quasimomentum=float(point[5])),
                                 **columns,
                             }
                     failing_index = batch[0][0]

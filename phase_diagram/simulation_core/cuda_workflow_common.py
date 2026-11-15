@@ -17,19 +17,54 @@ PORT_ROOT = SCRIPT_DIRECTORY.parents[1]
 RESULTS_DIRECTORY = SCRIPT_DIRECTORY / "results_cuda"
 
 
+def quasimomentum_values(grid: dict) -> list[float]:
+    """10.0: the starting quasimomenta every grid point runs at (hbar kL).
+
+    A 10.0 spread scan lists them in quasimomentum_values_kl; every other scan
+    runs its single initial_quasimomentum_kl (0 before 7.0)."""
+    values = grid.get("quasimomentum_values_kl")
+    if values:
+        return [float(value) for value in values]
+    return [float(grid.get("initial_quasimomentum_kl", 0.0))]
+
+
+def point_count(grid: dict) -> int:
+    """Number of GPU runs of a scan: alpha x frequency (x quasimomentum in 10.0)."""
+    return (len(grid["alpha_values"]) * len(grid["drive_frequency_hz_values"])
+            * len(quasimomentum_values(grid)))
+
+
+def point_coordinates(grid: dict, index: int) -> tuple[int, int, int]:
+    """(alpha index, frequency index, quasimomentum index) of a run index.
+
+    Alpha is outermost and the quasimomentum innermost, so a single-q scan
+    keeps the indices of 4.0-9.0 and the q runs of one point are consecutive."""
+    count = len(quasimomentum_values(grid))
+    cell, quasimomentum_index = divmod(index, count)
+    alpha_index, frequency_index = divmod(cell, len(grid["drive_frequency_hz_values"]))
+    return alpha_index, frequency_index, quasimomentum_index
+
+
+def point_grid(grid: dict, quasimomentum: float) -> dict:
+    """The grid as one run sees it: its own starting quasimomentum."""
+    return dict(grid, initial_quasimomentum_kl=float(quasimomentum))
+
+
 def grid_points(manifest: dict):
-    """Yield global indices and parameters for this runner's assigned range."""
+    """Yield (index, alpha index, frequency index, alpha, frequency, q) for this
+    runner's assigned range."""
     grid = manifest["parameter_grid"]
     frequencies = grid["drive_frequency_hz_values"]
-    total = len(grid["alpha_values"]) * len(frequencies)
+    quasimomenta = quasimomentum_values(grid)
+    total = point_count(grid)
     assignment = manifest.get("work_partition", {"start": 0, "stop": total})
     start, stop = assignment["start"], assignment["stop"]
     if not (0 <= start < stop <= total):
         raise ValueError("Invalid or empty grid-point assignment.")
     for index in range(start, stop):
-        alpha_index, frequency_index = divmod(index, len(frequencies))
-        yield (index, alpha_index, frequency_index,
-               grid["alpha_values"][alpha_index], frequencies[frequency_index])
+        alpha_index, frequency_index, quasimomentum_index = point_coordinates(grid, index)
+        yield (index, alpha_index, frequency_index, grid["alpha_values"][alpha_index],
+               frequencies[frequency_index], quasimomenta[quasimomentum_index])
 
 
 def experiment_drive_phase(alpha: float, inverted: bool) -> float:
@@ -112,6 +147,7 @@ def phase_dataset_label(
     grid_points: int | None = None,
     cloud_width_um: float | None = None,
     hold_time_ms: float | None = None,
+    quasimomentum_values: list[float] | None = None,
 ) -> str:
     """Build the shared descriptive label used by datasets and analysis files.
 
@@ -119,7 +155,8 @@ def phase_dataset_label(
     scans keep the position phase in the label. 7.0 adds the starting
     quasimomentum and the density smoothing when they are not 0; 8.0 adds the
     box and the starting cloud width when they differ from 4.0-7.0's (65536
-    points, 30 um) and the hold time when it is set.
+    points, 30 um) and the hold time when it is set. 10.0 spread scans name
+    their range of simulated quasimomenta instead of a single q.
     """
     if inverted is None:
         start = f"Phase_{parameter_token(phase_radians)}rad"
@@ -136,7 +173,10 @@ def phase_dataset_label(
             f"S{parameter_token(green_walls['sigma_um'])}um_"
             f"G{parameter_token(green_walls['gap_um'])}um"
         )
-    if quasimomentum:
+    if quasimomentum_values and len(quasimomentum_values) > 1:
+        label += (f"_Q{parameter_token(min(quasimomentum_values))}to"
+                  f"{parameter_token(max(quasimomentum_values))}x{len(quasimomentum_values)}kL")
+    elif quasimomentum:
         label += f"_Q{parameter_token(quasimomentum)}kL"
     if smoothing_um:
         label += f"_Smooth{parameter_token(smoothing_um)}um"

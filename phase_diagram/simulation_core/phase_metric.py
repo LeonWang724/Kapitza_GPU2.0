@@ -52,8 +52,12 @@ def statistics_columns(summary: dict, *, required: bool = False) -> dict:
 
 def csv_fields(contract: dict) -> tuple[str, ...]:
     """CSV columns; level statistics and (6.0) extended metrics are appended
-    only when the run computed them."""
-    return (CSV_FIELDS + (LEVEL_STATISTICS_FIELDS if contract.get("level_statistics") else ())
+    only when the run computed them. 10.0 spread scans add each run's starting
+    quasimomentum after the drive frequency."""
+    base = CSV_FIELDS
+    if contract.get("quasimomentum_spread"):
+        base = CSV_FIELDS[:3] + ("initial_quasimomentum_kl",) + CSV_FIELDS[3:]
+    return (base + (LEVEL_STATISTICS_FIELDS if contract.get("level_statistics") else ())
             + (EXTENDED_FIELDS if contract.get("extended_metrics") else ()))
 
 
@@ -80,6 +84,8 @@ def csv_row(record: dict, summary: dict, config: dict, contract: dict) -> dict:
         "snapshots_averaged": samples, "metric": value,
         **statistics_columns(summary, required=contract.get("statistics_version", 0) == 1),
     }
+    if contract.get("quasimomentum_spread"):
+        row["initial_quasimomentum_kl"] = record["initial_quasimomentum_kl"]
     if contract.get("level_statistics"):
         row.update(level_statistics_columns(record))
     if contract.get("extended_metrics"):

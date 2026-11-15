@@ -31,7 +31,7 @@ def run_full_sweep(
     extra_arguments = [str(argument) for argument in
                        manifest.get("solver", {}).get("extra_arguments", [])]
     level_settings = manifest["analysis_contract"].get("level_statistics")
-    for index, alpha_index, frequency_index, alpha, frequency in grid_points(manifest):
+    for index, alpha_index, frequency_index, alpha, frequency, _ in grid_points(manifest):
         output = results_root / f"out_{index:03d}"
         inputs_directory = results_root / "inputs" / f"run_{index:03d}"
         config = results_root / "configs" / f"run_{index:03d}.config"

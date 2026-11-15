@@ -22,12 +22,17 @@ import numpy as np
 import tables as tb
 
 from create_initial_state_function import GRID_SPACING_M
-from cuda_workflow_common import RESULTS_DIRECTORY, phase_dataset_label, read_config
+from cuda_workflow_common import (
+    RESULTS_DIRECTORY, phase_dataset_label, point_coordinates, point_count, read_config,
+)
 from extended_fields import FIELD_TITLES as EXTENDED_TITLES
 from level_statistics import R2_GOE, R2_POISSON, R_GOE, R_POISSON
 from phase_metric import (
     LEVEL_STATISTICS_FIELDS, STATISTICS_FIELDS, csv_fields, csv_row, level_statistics_columns,
     smooth_density, statistics_from_probabilities,
+)
+from quasimomentum_spread import (
+    APPROXIMATE_NOTE, COVERAGE_WARNING, combine_rows, describe,
 )
 
 
@@ -43,6 +48,11 @@ ASK_FOR_VARIABLES = True
 X_VARIABLE = "alpha"
 Y_VARIABLE = "drive_frequency_hz"
 COLOR_VARIABLE = "metric"        # the IPR, mean discrete sum_j |psi_j|^4; "all" plots every result
+# 10.0 spread scans: the Gaussian of starting quasimomenta (hbar kL) the runs at
+# each point are combined with. None uses the run's QUASIMOMENTUM_CENTER_KL and
+# QUASIMOMENTUM_SPREAD_KL; set numbers to try another spread without rerunning.
+QUASIMOMENTUM_CENTER_KL: float | None = None
+QUASIMOMENTUM_SPREAD_KL: float | None = None
 # None for automatic colour limits, or (minimum, maximum) such as (0.0, 0.8).
 COLOR_LIMITS: tuple[float | None, float | None] | None = None
 # None picks a title for the plotted column.
@@ -104,12 +114,13 @@ def add_derived_columns(row: dict) -> dict:
 # phase_radians (the lattice's position phase) and leave "inverted" blank.
 # 7.0 scans add the starting quasimomentum and the density smoothing (0 before);
 # 8.0 scans the box, the starting cloud width and the hold time (65536 points,
-# 30 um and blank before).
+# 30 um and blank before). 10.0 spread scans give the centre of the q spread as
+# initial_quasimomentum_kl and its width as quasimomentum_spread_kl (0 before).
 DATASET_COLUMNS = (
     "lattice_depth_v0_er", "initial_lattice_depth_v0_er", "phase_radians", "inverted",
     "green_wall_height_er", "green_wall_sigma_um", "green_wall_gap_um",
     "initial_quasimomentum_kl", "density_smoothing_um",
-    "grid_points", "initial_cloud_width_um", "hold_time_ms",
+    "grid_points", "initial_cloud_width_um", "hold_time_ms", "quasimomentum_spread_kl",
 )
 # Inputs that can be held fixed when several rows share one plotted point.
 PARAMETER_COLUMNS = ("alpha", "drive_frequency_hz") + DATASET_COLUMNS
@@ -152,10 +163,11 @@ def grid_parameter_label(grid: dict) -> str:
                                smoothing_um=float(grid.get("density_smoothing_um", 0.0)),
                                grid_points=grid.get("grid_points"),
                                cloud_width_um=grid.get("initial_cloud_width_um"),
-                               hold_time_ms=grid.get("hold_time_ms"))
+                               hold_time_ms=grid.get("hold_time_ms"),
+                               quasimomentum_values=grid.get("quasimomentum_values_kl"))
 
 
-def automatic_plot_title(grid: dict) -> str:
+def automatic_plot_title(grid: dict, spread: dict | None = None) -> str:
     lattice_depth = float(grid["lattice_depth_v0_er"])
     initial_depth = float(
         grid.get("initial_lattice_depth_v0_er", 2.0 * lattice_depth)
@@ -174,7 +186,11 @@ def automatic_plot_title(grid: dict) -> str:
                   f"gap {walls['gap_um']:g} um")
     quasimomentum = float(grid.get("initial_quasimomentum_kl", 0.0))
     smoothing = float(grid.get("density_smoothing_um", 0.0))
-    if quasimomentum or smoothing:
+    if spread:
+        title += (f"\nq spread: centre {spread['center_kl']:g}, width {spread['spread_kl']:g} "
+                  f"hbar kL ({len(grid['quasimomentum_values_kl'])} q values)"
+                  + (f", {smoothing:g} um smoothing" if smoothing else ""))
+    elif quasimomentum or smoothing:
         title += (f"\nq = {quasimomentum:g} hbar kL"
                   + (f", {smoothing:g} um smoothing" if smoothing else ""))
     if grid.get("grid_points") is not None:
@@ -201,6 +217,7 @@ def dataset_columns(grid: dict) -> dict:
         "grid_points": int(grid.get("grid_points", 65536)),
         "initial_cloud_width_um": float(grid.get("initial_cloud_width_um", 30.0)),
         "hold_time_ms": None if grid.get("hold_time_ms") is None else float(grid["hold_time_ms"]),
+        "quasimomentum_spread_kl": float((grid.get("quasimomentum_spread") or {}).get("spread_kl", 0.0)),
     }
 
 
@@ -237,8 +254,12 @@ def resolve_manifest(dataset: str | Path | None = None) -> Path:
     return max(completed, key=lambda item: item[0])[1].resolve()
 
 
-def dataset_analysis(manifest_path: Path) -> dict:
-    """Validated rows and (frequency x alpha) matrices of one completed dataset."""
+def dataset_analysis(manifest_path: Path, *, quasimomentum_center: float | None = None,
+                     quasimomentum_spread: float | None = None) -> dict:
+    """Validated rows and (frequency x alpha) matrices of one completed dataset.
+
+    10.0 spread scans: the runs of each point are combined into one row with
+    the Gaussian of q given here, or the run's own centre and spread (None)."""
     manifest_path = manifest_path.resolve()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("status") != "completed":
@@ -263,10 +284,11 @@ def dataset_analysis(manifest_path: Path) -> dict:
         runs = [json.loads(line) for line in journal_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     else:
         runs = manifest["runs"]
-    if len(runs) != alpha_values.size * frequency_values.size:
+    if len(runs) != point_count(grid):
         raise ValueError("Completed dataset does not contain every grid point.")
     scan_columns = dataset_columns(grid)
-    rows = []
+    spread = contract.get("quasimomentum_spread")
+    rows, run_rows = [], []
     seen = set()
     for run in runs:
         if run.get("status") != "completed":
@@ -305,27 +327,53 @@ def dataset_analysis(manifest_path: Path) -> dict:
         frequency_index = int(run["frequency_index"])
         if not (0 <= alpha_index < alpha_values.size and 0 <= frequency_index < frequency_values.size):
             raise ValueError("Grid point index is out of range.")
-        coordinate = (frequency_index, alpha_index)
+        coordinate = (frequency_index, alpha_index, int(run.get("quasimomentum_index", 0)))
         if coordinate in seen:
             raise ValueError("Dataset contains a duplicate grid point.")
         if run["alpha"] != alpha_values[alpha_index] or run["drive_frequency_hz"] != frequency_values[frequency_index]:
             raise ValueError("Grid point parameters do not match the manifest.")
+        if spread and point_coordinates(grid, int(run["run_index"]))[2] != coordinate[2]:
+            raise ValueError("Run quasimomentum does not match the manifest.")
         seen.add(coordinate)
-        metric[frequency_index, alpha_index] = mean_metric
+        run_rows.append((frequency_index, alpha_index, row))
+        print(
+            f"out_{run['run_index']:03d}: alpha={run['alpha']:.10g}, "
+            f"frequency={run['drive_frequency_hz']:.10g} Hz"
+            + (f", q={run['initial_quasimomentum_kl']:g}" if spread else "")
+            + f", metric={mean_metric:.10g}"
+        )
+    used_spread = None
+    if spread:
+        center = spread["center_kl"] if quasimomentum_center is None else float(quasimomentum_center)
+        width = spread["spread_kl"] if quasimomentum_spread is None else float(quasimomentum_spread)
+        combined, coverage = combine_rows([row for *_, row in run_rows], center, width)
+        print("Quasimomentum spread: " + describe(spread["values_kl"], center, width))
+        if coverage < COVERAGE_WARNING:
+            print(f"Warning: only {coverage:.1%} of this spread lies within the simulated q values.")
+        print(f"Columns {APPROXIMATE_NOTE}.")
+        alpha_lookup = {float(value): index for index, value in enumerate(alpha_values)}
+        frequency_lookup = {float(value): index for index, value in enumerate(frequency_values)}
+        run_rows = [(frequency_lookup[float(row["drive_frequency_hz"])],
+                     alpha_lookup[float(row["alpha"])], row) for row in combined]
+        scan_columns = dict(scan_columns, initial_quasimomentum_kl=center,
+                            quasimomentum_spread_kl=width)
+        used_spread = {"center_kl": center, "spread_kl": width, "coverage": coverage}
+    for frequency_index, alpha_index, row in run_rows:
+        metric[frequency_index, alpha_index] = row["metric"]
         for key in matrix_fields:
-            if row[key] is not None:
+            if row.get(key) is not None:
                 statistics_matrices[key][frequency_index, alpha_index] = row[key]
         row.update(scan_columns)
         rows.append(add_derived_columns(row))
-        print(
-            f"out_{run['run_index']:03d}: alpha={run['alpha']:.10g}, "
-            f"frequency={run['drive_frequency_hz']:.10g} Hz, metric={mean_metric:.10g}"
-        )
+    fields = csv_fields(contract) + DERIVED_COLUMNS + DATASET_COLUMNS
+    if spread:
+        fields += ("quasimomentum_coverage",)
     return {
         "manifest": manifest, "root": root, "rows": rows,
-        "fields": csv_fields(contract) + DERIVED_COLUMNS + DATASET_COLUMNS,
+        "fields": tuple(dict.fromkeys(fields)),
         "alpha_values": alpha_values, "frequency_values": frequency_values,
         "metric": metric, "matrices": statistics_matrices,
+        "quasimomentum_spread": used_spread,
     }
 
 
@@ -548,7 +596,7 @@ def write_dataset_analysis(manifest_path: Path, data: dict, *, x: str = "alpha",
         writer = csv.DictWriter(handle, fieldnames=data["fields"])
         writer.writeheader()
         writer.writerows(data["rows"])
-    title = plot_title or automatic_plot_title(grid)
+    title = plot_title or automatic_plot_title(grid, data.get("quasimomentum_spread"))
     if where:
         title += "\n" + ", ".join(f"{column} = {value:g}" for column, value in where.items())
     selected = select_rows(data["rows"], where or {})
@@ -569,9 +617,13 @@ def write_dataset_analysis(manifest_path: Path, data: dict, *, x: str = "alpha",
     return {"npz": npz_path, "csv": csv_path, "image": images[0], "images": images}
 
 
-def analyze(manifest_path: Path, **plot_settings) -> dict[str, Path]:
+def analyze(manifest_path: Path, *, quasimomentum_center: float | None = QUASIMOMENTUM_CENTER_KL,
+            quasimomentum_spread: float | None = QUASIMOMENTUM_SPREAD_KL,
+            **plot_settings) -> dict[str, Path]:
     """Analyze one completed dataset; plot settings as for write_dataset_analysis."""
-    return write_dataset_analysis(manifest_path, dataset_analysis(manifest_path), **plot_settings)
+    data = dataset_analysis(manifest_path, quasimomentum_center=quasimomentum_center,
+                            quasimomentum_spread=quasimomentum_spread)
+    return write_dataset_analysis(manifest_path, data, **plot_settings)
 
 
 def parse_where(items: list[str]) -> dict[str, float]:
@@ -632,7 +684,8 @@ def main() -> int:
         else:
             manifest_path = resolve_manifest(item)
             print(f"Analyzing dataset: {manifest_path.parent.name}")
-            data = dataset_analysis(manifest_path)
+            data = dataset_analysis(manifest_path, quasimomentum_center=QUASIMOMENTUM_CENTER_KL,
+                                    quasimomentum_spread=QUASIMOMENTUM_SPREAD_KL)
             datasets.append((manifest_path, data))
             rows.extend(dict(row, dataset=manifest_path.parent.name) for row in data["rows"])
 

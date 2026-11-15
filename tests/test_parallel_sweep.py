@@ -32,7 +32,8 @@ from phase_metric import METRIC_NAME
 # The 6.0 settings: these scans test tabs, batches and merging, not the 7.0
 # quasimomentum, smoothing and extended metrics, which have their own tests.
 SETTINGS_6 = {"ExtendedMetrics": False, "INITIAL_QUASIMOMENTUM_KL": 0.0, "DensitySmoothing_um": 0.0,
-              "GRID_POINTS": 65536, "INITIAL_CLOUD_WIDTH_UM": 30.0, "HOLD_TIME_MS": None}
+              "GRID_POINTS": 65536, "INITIAL_CLOUD_WIDTH_UM": 30.0, "HOLD_TIME_MS": None,
+              "QUASIMOMENTUM_VALUES_KL": None}
 
 
 # A stand-in executable exercises real Python subprocesses, configs and files.
@@ -175,6 +176,7 @@ class PartitionTests(unittest.TestCase):
 
     def test_editable_tab_count_and_plan_do_not_require_cuda(self):
         with (patch.object(runner, "NUMBER_OF_TABS", 11),
+              patch.object(runner, "QUASIMOMENTUM_VALUES_KL", None),
               patch.object(runner, "ALPHA_VALUES", np.linspace(1, 100, 100)),
               patch.object(runner, "DRIVE_FREQUENCY_HZ_VALUES", np.linspace(1, 100, 100)),
               patch.object(runner, "locate_executable") as locate,

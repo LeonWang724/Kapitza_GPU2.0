@@ -1,4 +1,46 @@
-# Kapitza_GPU9.0
+# Kapitza_GPU10.0
+
+Version 10.0 keeps everything of 9.0 and gives the atoms a spread of starting
+quasimomenta instead of one q for every atom. With
+`QUASIMOMENTUM_VALUES_KL = None` a run is identical to 9.0.
+
+```python
+QUASIMOMENTUM_VALUES_KL = [0.0, 0.05, 0.10, 0.15, 0.20]  # q runs per grid point (hbar kL)
+QUASIMOMENTUM_CENTER_KL = 0.0                            # Gaussian of q they are combined with
+QUASIMOMENTUM_SPREAD_KL = 0.1
+```
+
+- **How it works.** A real cloud has atoms at many q. Without interactions each
+  group of atoms with the same q evolves on its own, and groups at different q
+  do not interfere in the image, so the camera sees the sum of their clouds.
+  Every grid point now runs once per q value (each run is the group of atoms at
+  that q), and the runs are added up, weighted by the fraction of atoms a
+  Gaussian of q puts at each value (`quasimomentum_spread.py`).
+- **Mirror images.** A run at +q is the mirror image x -> -x of one at -q (the
+  lattice, drive, starting cloud and green walls are symmetric), so a spread
+  centred at 0 needs only q >= 0.
+- **Change the spread without rerunning.** `metrics.csv` keeps one row per grid
+  point and q (new column `initial_quasimomentum_kl`). MAKE combines them with
+  the run's centre and spread, or with `QUASIMOMENTUM_CENTER_KL` /
+  `QUASIMOMENTUM_SPREAD_KL` set in MAKE; the plot tools have the same two
+  settings, and `python quasimomentum_spread.py metrics.csv --center 0
+  --spread 0.1` writes a combined CSV.
+- **What combines exactly.** The widths (StdDev from the second moments, not by
+  averaging widths), cloud centre, central fraction, atoms lost, pendulum
+  angle, momentum spread and orders, energy, return probability and the
+  Bloch-state model's populations: they add up atom by atom. The IPRs,
+  entropies, kurtosis, on-site spread, growth rates and level statistics
+  depend on the square of the density or the whole time series, which
+  `metrics.csv` does not keep; they are the average over q, weighted like the
+  atoms.
+- **Coverage.** The plan prints the share of the Gaussian inside the simulated
+  values (97.6% for the defaults) and warns below 95%; widen
+  `QUASIMOMENTUM_VALUES_KL` for wider or off-centre spreads.
+- **Cost.** 5 values = 5x the GPU runs of 9.0 (500 for a 10 x 10 scan). The
+  Bloch-state model and level statistics run at each run's own q. Compact
+  storage only. No GPU code change: a 9.0 build runs 10.0 scans.
+
+## Version 9.0
 
 Version 9.0 keeps everything of 8.0 and starts the simulated cloud at the
 experiment's width. One setting changed in

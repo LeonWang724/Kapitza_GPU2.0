@@ -18,6 +18,7 @@ from phase_metric import smoothing_contract
 from compact_sweep import run_compact_sweep
 from full_sweep import run_full_sweep
 from parallel_sweep import print_assignments, run_parallel_sweep, split_point_ranges
+from quasimomentum_spread import COVERAGE_WARNING, describe, spread_weights, validate_values
 from cuda_workflow_common import (
     PORT_ROOT,
     RESULTS_DIRECTORY,
@@ -60,7 +61,22 @@ INVERTED = False
 # columns) and the level statistics. The classical ensemble has no
 # quasimomentum. 0 gives the 4.0-6.0 BEC at rest. A single q > 0 makes the cloud
 # drift; the widths are measured about its moving centre.
+# 10.0: used only when QUASIMOMENTUM_VALUES_KL below is None.
 INITIAL_QUASIMOMENTUM_KL = 0.1
+
+# 10.0: a spread of quasimomenta. A real cloud has atoms at many q; without
+# interactions each group of atoms with the same q evolves on its own and the
+# camera sees the sum of their clouds. Every grid point runs once per value in
+# QUASIMOMENTUM_VALUES_KL (hbar kL; each run is the group of atoms at that q),
+# and MAKE and the plot tools add the runs up, weighted by a Gaussian
+# distribution of q with this centre and spread (standard deviation). Negative
+# q are the mirror images of positive q, so a spread centred at 0 needs only
+# q >= 0. The centre and spread can be changed afterwards without rerunning;
+# the values set what can be covered (5 values = 5x the GPU time of 9.0).
+# None runs only INITIAL_QUASIMOMENTUM_KL for every atom, exactly as 9.0.
+QUASIMOMENTUM_VALUES_KL = [0.0, 0.05, 0.10, 0.15, 0.20]
+QUASIMOMENTUM_CENTER_KL = 0.0
+QUASIMOMENTUM_SPREAD_KL = 0.1
 
 # 7.0: smoothing of the density |psi|^2 over this width (um) before every
 # position metric, like the camera's 4 um pixels: cloud width and centre, IPR,
@@ -148,6 +164,26 @@ def green_wall_settings() -> tuple[dict | None, float | None]:
     return checked, fraction
 
 
+def quasimomentum_settings() -> dict | None:
+    """10.0: the validated spread of quasimomenta, or None for a single q."""
+    if QUASIMOMENTUM_VALUES_KL is None:
+        return None
+    if isinstance(QUASIMOMENTUM_VALUES_KL, (str, bytes)) \
+            or not hasattr(QUASIMOMENTUM_VALUES_KL, "__iter__"):
+        raise ValueError("QUASIMOMENTUM_VALUES_KL must be a list of numbers or None.")
+    values = validate_values(list(QUASIMOMENTUM_VALUES_KL))
+    weights, coverage = spread_weights(values, QUASIMOMENTUM_CENTER_KL, QUASIMOMENTUM_SPREAD_KL)
+    return {
+        "values_kl": values,
+        "center_kl": float(QUASIMOMENTUM_CENTER_KL),
+        "spread_kl": float(QUASIMOMENTUM_SPREAD_KL),
+        "distribution": "gaussian",
+        "coverage": coverage,
+        "negative_q": "mirror image x -> -x of +q when -q is not simulated",
+        "combination": "quasimomentum_spread.py",
+    }
+
+
 def extended_settings() -> dict | None:
     if not ExtendedMetrics:
         return None
@@ -194,6 +230,8 @@ def dataset_label(green_walls: dict | None) -> str:
         quasimomentum=float(INITIAL_QUASIMOMENTUM_KL), smoothing_um=float(DensitySmoothing_um),
         grid_points=GRID_POINTS, cloud_width_um=float(INITIAL_CLOUD_WIDTH_UM),
         hold_time_ms=HOLD_TIME_MS,
+        quasimomentum_values=(None if QUASIMOMENTUM_VALUES_KL is None
+                              else list(QUASIMOMENTUM_VALUES_KL)),
     )
 
 
@@ -246,12 +284,15 @@ def main() -> int:
                 or not isinstance(INITIAL_QUASIMOMENTUM_KL, (int, float)) \
                 or not -1.0 < INITIAL_QUASIMOMENTUM_KL < 1.0:
             raise ValueError("INITIAL_QUASIMOMENTUM_KL must be a number with -1 < q < 1.")
+        spread = quasimomentum_settings()
         base_values = read_config(SCRIPT_DIRECTORY / "gpe1d.config")
         smoothing = smoothing_contract(DensitySmoothing_um, float(base_values["step_x"]),
                                        GRID_SPACING_M)
         scan = scan_settings(base_values)
-        level_statistics = (level_statistics_settings(float(INITIAL_QUASIMOMENTUM_KL),
-                                                      LevelStatisticsPlaneWaveCutoff)
+        # 10.0: each run uses its own q; the manifest keeps the centre.
+        level_statistics = (level_statistics_settings(
+                                float(spread["center_kl"] if spread else INITIAL_QUASIMOMENTUM_KL),
+                                LevelStatisticsPlaneWaveCutoff)
                             if CalculateLevelStatistics or ExtendedMetrics else None)
         # Checks INVERTED and, when inverted, that every alpha >= 2.
         drive_phases = [experiment_drive_phase(alpha, INVERTED) for alpha in ALPHA_VALUES]
@@ -259,7 +300,10 @@ def main() -> int:
         parser.error(str(error))
     # Snapshot output and the reference loop keep one point per solver run.
     batch = 1 if arguments.storage == "full" or arguments.reference_loop else arguments.batch
-    total = len(ALPHA_VALUES) * len(DRIVE_FREQUENCY_HZ_VALUES)
+    if spread and arguments.storage != "compact":
+        parser.error("QUASIMOMENTUM_VALUES_KL needs compact storage (no --storage full).")
+    quasimomenta = spread["values_kl"] if spread else [float(INITIAL_QUASIMOMENTUM_KL)]
+    total = len(ALPHA_VALUES) * len(DRIVE_FREQUENCY_HZ_VALUES) * len(quasimomenta)
     assignments = split_point_ranges(total, arguments.tabs)
     print_assignments(total, arguments.tabs, assignments)
     if batch > 1:
@@ -285,8 +329,19 @@ def main() -> int:
     simulated = (f" ({scan['simulated_hold_ms']:.4f} ms)"
                  if scan["simulated_hold_ms"] is not None else "")
     print(f"Hold time: {hold} = {scan['number_of_iterations']:,} steps{simulated}.")
-    print(f"Initial quasimomentum: q = {float(INITIAL_QUASIMOMENTUM_KL):g} hbar kL for every atom "
-          "(GPU start, Bloch-state model, level statistics).")
+    if spread:
+        print(f"Quasimomentum spread: every grid point runs at q = "
+              f"{', '.join(f'{q:g}' for q in quasimomenta)} hbar kL "
+              f"({len(ALPHA_VALUES) * len(DRIVE_FREQUENCY_HZ_VALUES):,} grid points x "
+              f"{len(quasimomenta)} = {total:,} GPU runs; negative q by mirror symmetry).")
+        print("  Combined as a " + describe(quasimomenta, spread["center_kl"], spread["spread_kl"]))
+        if spread["coverage"] < COVERAGE_WARNING:
+            print(f"  Warning: only {spread['coverage']:.1%} of this spread lies within the "
+                  "simulated values; add larger q to QUASIMOMENTUM_VALUES_KL.")
+        print("  The centre and spread can be changed afterwards in MAKE and the plot tools.")
+    else:
+        print(f"Initial quasimomentum: q = {float(INITIAL_QUASIMOMENTUM_KL):g} hbar kL for every "
+              "atom (GPU start, Bloch-state model, level statistics).")
     if smoothing:
         if arguments.reference_loop:
             parser.error("DensitySmoothing_um needs the fused loop (no --reference-loop).")
@@ -303,9 +358,10 @@ def main() -> int:
     else:
         print("Extended metrics: off")
     if level_statistics:
+        where = ("at each run's own q" if spread
+                 else f"at q = {level_statistics['quasimomentum']:g} kL")
         print(f"Level statistics: <r>, <r^2>, eta and eta_r_squared of the Floquet quasienergies "
-              f"at q = {level_statistics['quasimomentum']:g} kL with plane waves "
-              f"|n| <= {level_statistics['plane_wave_cutoff']}.")
+              f"{where} with plane waves |n| <= {level_statistics['plane_wave_cutoff']}.")
     else:
         print("Level statistics: off")
     if arguments.plan:
@@ -397,7 +453,8 @@ def main() -> int:
         },
         "source_tree": git_provenance(PORT_ROOT),
         "parameter_grid": {
-            "iteration_order": "alpha_outer_frequency_inner",
+            "iteration_order": ("alpha_outer_frequency_middle_quasimomentum_inner" if spread
+                                else "alpha_outer_frequency_inner"),
             "alpha_values": [float(value) for value in ALPHA_VALUES],
             "drive_frequency_hz_values": [
                 float(value) for value in DRIVE_FREQUENCY_HZ_VALUES
@@ -411,8 +468,15 @@ def main() -> int:
             # None, or the walls' height (E_R), sigma (um) and centre gap (um).
             "green_walls": green_walls,
             # 7.0: starting quasimomentum (units of kL) and density smoothing (um).
-            "initial_quasimomentum_kl": float(INITIAL_QUASIMOMENTUM_KL),
+            "initial_quasimomentum_kl": float(spread["center_kl"] if spread
+                                              else INITIAL_QUASIMOMENTUM_KL),
             "density_smoothing_um": float(DensitySmoothing_um),
+            # 10.0: the q values every grid point runs at (absent for a single q)
+            # and the default spread they are combined with.
+            **({"quasimomentum_values_kl": spread["values_kl"],
+                "quasimomentum_spread": {key: spread[key] for key in
+                                         ("center_kl", "spread_kl", "distribution")}}
+               if spread else {}),
             # 8.0: box, starting cloud width and hold time (None = gpe1d.config's steps).
             "grid_points": scan["grid_points"],
             "initial_cloud_width_um": scan["initial_cloud_width_um"],
@@ -436,6 +500,8 @@ def main() -> int:
             "extended_metrics": extended_settings(),
             # None, or the 7.0 smoothing of |psi|^2 (phase_metric.smoothing_contract).
             "density_smoothing": smoothing,
+            # None, or the 10.0 quasimomentum spread (quasimomentum_spread.py).
+            "quasimomentum_spread": spread,
             "normalization": "none",
             "frequency_axis_inverted": True,
             "colormap": "inferno",

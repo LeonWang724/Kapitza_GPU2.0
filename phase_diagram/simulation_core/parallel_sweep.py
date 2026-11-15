@@ -19,7 +19,8 @@ import uuid
 from pathlib import Path
 
 from cuda_workflow_common import (
-    PORT_ROOT, SCRIPT_DIRECTORY, read_config, sha256_file, utc_now, write_json_atomic,
+    PORT_ROOT, SCRIPT_DIRECTORY, point_coordinates, point_count, quasimomentum_values,
+    read_config, sha256_file, utc_now, write_json_atomic,
 )
 
 
@@ -122,7 +123,9 @@ def merge_workers(root: Path, manifest: dict) -> None:
 
     grid = manifest["parameter_grid"]
     frequencies = grid["drive_frequency_hz_values"]
-    total = len(grid["alpha_values"]) * len(frequencies)
+    total = point_count(grid)
+    quasimomenta = quasimomentum_values(grid)
+    spread = manifest["analysis_contract"].get("quasimomentum_spread")
     records = []
     seen = set()
     for assignment in manifest["parallel_execution"]["workers"]:
@@ -150,10 +153,12 @@ def merge_workers(root: Path, manifest: dict) -> None:
             index = record["run_index"]
             if not (assignment["start"] <= index < assignment["stop"]) or index in seen:
                 raise ValueError("Worker results contain duplicate or incorrectly assigned points.")
-            ai, fi = divmod(index, len(frequencies))
+            ai, fi, qi = point_coordinates(grid, index)
             if (record.get("status") != "completed" or record["alpha_index"] != ai
                     or record["frequency_index"] != fi or record["alpha"] != grid["alpha_values"][ai]
-                    or record["drive_frequency_hz"] != frequencies[fi]):
+                    or record["drive_frequency_hz"] != frequencies[fi]
+                    or (spread and (record.get("quasimomentum_index") != qi
+                                    or record.get("initial_quasimomentum_kl") != quasimomenta[qi]))):
                 raise ValueError("Worker point parameters do not match the parent grid.")
             if manifest["storage_mode"] == "compact":
                 validate_summary(record["metric_summary"], manifest["simulation_config"],
@@ -197,7 +202,7 @@ def run_parallel_sweep(
     tabs: int, headless: bool = False,
 ) -> None:
     grid = manifest["parameter_grid"]
-    total = len(grid["alpha_values"]) * len(grid["drive_frequency_hz_values"])
+    total = point_count(grid)
     assignments = split_point_ranges(total, tabs)
     provenance = results_root / "provenance"
     provenance.mkdir()
