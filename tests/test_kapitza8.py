@@ -108,6 +108,7 @@ class SettingsTests(unittest.TestCase):
     def test_plan_reports_box_cloud_and_hold(self):
         with (patch.object(runner, "locate_executable") as locate,
               patch.object(sys, "argv", ["runner", "--plan"]),
+              patch.multiple(runner, INITIAL_CLOUD_WIDTH_UM=30.0),     # the 8.0 default
               contextlib.redirect_stdout(io.StringIO()) as output):
             self.assertEqual(runner.main(), 0)
         locate.assert_not_called()

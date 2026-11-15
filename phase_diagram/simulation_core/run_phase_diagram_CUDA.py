@@ -78,10 +78,12 @@ DensitySmoothing_um = 4.0
 GRID_POINTS = 262144
 
 # 8.0: the starting cloud: standard deviation of |psi|^2 of the Gaussian
-# envelope, in um. 30 is the cloud of 4.0-7.0; set it from the lab's
-# unmodulated reference trial. The central window (central_fraction) is two
-# of these widths.
-INITIAL_CLOUD_WIDTH_UM = 30.0
+# envelope, in um (the atom cloud along the lattice, not a beam waist). The
+# central window (central_fraction) is two of these widths.
+# 9.0: 340, the experiment's cloud: trial 11243's StdDev2 is 340-370 um where
+# the drive barely acts (alpha = 4). 30 is the cloud of 4.0-8.0. Set it from
+# the lab's unmodulated reference trial when you have it.
+INITIAL_CLOUD_WIDTH_UM = 340.0
 
 # 8.0: hold time with the drive on, in ms (the lab's t_mod), turned into time
 # steps of the solver. None keeps number_of_iterations from gpe1d.config

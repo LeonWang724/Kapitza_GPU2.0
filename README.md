@@ -1,4 +1,31 @@
-# Kapitza_GPU8.0
+# Kapitza_GPU9.0
+
+Version 9.0 keeps everything of 8.0 and starts the simulated cloud at the
+experiment's width. One setting changed in
+`phase_diagram/simulation_core/run_phase_diagram_CUDA.py`; with
+`INITIAL_CLOUD_WIDTH_UM = 30` a run is identical to 8.0.
+
+```python
+INITIAL_CLOUD_WIDTH_UM = 340.0  # starting atom cloud, std of |psi|^2 along the lattice (8.0: 30)
+```
+
+- **Why 340 um.** In trial 11243 the cells where the drive barely acts
+  (alpha = 4) have StdDev2 of 340-370 um, so the lab's cloud starts about
+  340 um wide. 8.0 started at 30 um, which left every weakly driven cell about
+  300 um narrower than the experiment. The width is the atom cloud along the
+  lattice, not a beam waist. Set it from the lab's unmodulated reference trial
+  when you have it.
+- **Same box and GPU time as 8.0.** 262144 points (+-3.0 mm, absorbing walls
+  from +-2.1 mm); three starting widths fit inside the walls. The 65536 box of
+  4.0-7.0 cannot hold this cloud and is refused.
+- `central_fraction` counts the atoms within two starting widths, now +-680 um.
+- The dataset name ends in `_W340um`; the manifest and MAKE's columns record
+  the width, and `sigma_x_4um_um_initial` is about 340 um.
+- The plot tools (`~/Desktop/Kapitza-Phase diagrams`, not in this repository)
+  have a `START_WIDTH_UM` setting (MATLAB: `startWidth`) that shows an 8.0
+  run as if it had started wider, adding the width in quadrature.
+
+## Version 8.0
 
 Version 8.0 keeps everything of 7.0 and makes the simulation comparable with the
 lab's phase diagrams (trial 11243: the simulated box cut off exactly the fast
