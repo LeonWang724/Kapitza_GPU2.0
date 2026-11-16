@@ -223,7 +223,7 @@ class ScanTests(unittest.TestCase):
         with (patch.object(runner, "SCRIPT_DIRECTORY", self.core),
               patch.multiple(runner, INITIAL_QUASIMOMENTUM_KL=quasimomentum,
                              DensitySmoothing_um=smoothing_um, GRID_POINTS=65536,
-                             INITIAL_CLOUD_WIDTH_UM=30.0, HOLD_TIME_MS=None,
+                             INITIAL_CLOUD_WIDTH_UM=30.0, HOLD_TIME_MS=None, LATTICE_HOLD_MS=0,
                              QUASIMOMENTUM_VALUES_KL=None, LabMeasurement=False,
                              DRIVE_PHASE_CONVENTION="theory"),
               patch.multiple(runner, ExtendedMetrics=True, INVERTED=inverted, NUMBER_OF_TABS=1,

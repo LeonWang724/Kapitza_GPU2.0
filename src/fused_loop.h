@@ -18,27 +18,44 @@
 // cos(omega * t_n + phase), where t_n is time_step accumulated n times.
 // Each system has its own phase; none given means 0 for all, which is the
 // original cos(omega * t_n) bit for bit.
+//
+// 12.0: a system with a drive stop s > 0 uses that cosine only for
+// iterations n < s; from iteration s on its factor is the constant hold
+// value (a static lattice between the drive and the image). No stops given,
+// or a stop of 0, drives every iteration exactly as before.
 class FloquetClock {
 public:
     FloquetClock(std::vector<double> omegas, double time_step,
-                 std::vector<double> phases = {})
+                 std::vector<double> phases = {}, std::vector<int> stops = {},
+                 std::vector<double> holds = {})
         : omegas_(std::move(omegas)),
           phases_(phases.empty() ? std::vector<double>(omegas_.size(), 0.0)
                                  : std::move(phases)),
+          stops_(stops.empty() ? std::vector<int>(omegas_.size(), 0) : std::move(stops)),
+          holds_(holds.empty() ? std::vector<double>(omegas_.size(), 0.0) : std::move(holds)),
           time_step_(time_step),
           previous_(omegas_.size(), 0.0),
           current_(omegas_.size(), 0.0) {
         if (phases_.size() != omegas_.size()) {
             throw std::invalid_argument("FloquetClock needs one phase per system.");
         }
+        if (stops_.size() != omegas_.size() || holds_.size() != omegas_.size()) {
+            throw std::invalid_argument("FloquetClock needs one drive stop and hold per system.");
+        }
+        for (int stop : stops_) {
+            if (stop < 0) throw std::invalid_argument("A drive stop must be 0 or positive.");
+        }
     }
 
     void advance() {
         previous_ = current_;
         for (std::size_t system = 0; system < omegas_.size(); ++system) {
-            current_[system] = std::cos(omegas_[system] * total_time_ + phases_[system]);
+            current_[system] = stops_[system] > 0 && iteration_ >= stops_[system]
+                                   ? holds_[system]
+                                   : std::cos(omegas_[system] * total_time_ + phases_[system]);
         }
         total_time_ += time_step_;
+        ++iteration_;
     }
 
     const std::vector<double>& previous() const { return previous_; }
@@ -47,11 +64,22 @@ public:
 private:
     std::vector<double> omegas_;
     std::vector<double> phases_;
+    std::vector<int> stops_;
+    std::vector<double> holds_;
     double time_step_;
     double total_time_ = 0.0;
+    long long iteration_ = 0;
     std::vector<double> previous_;
     std::vector<double> current_;
 };
+
+// 12.0: the Floquet factor of one iteration of the reference loop, with the
+// same drive stop and hold as FloquetClock.
+inline double drive_factor(double omega, double total_time, double phase, int iteration,
+                           int drive_stop, double hold_factor) {
+    return drive_stop > 0 && iteration >= drive_stop ? hold_factor
+                                                     : std::cos(omega * total_time + phase);
+}
 
 // Steps must provide:
 //   advance_potential()      next iteration's Floquet factors

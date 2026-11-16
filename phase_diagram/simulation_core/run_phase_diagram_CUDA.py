@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -117,6 +118,25 @@ INITIAL_CLOUD_WIDTH_UM = 35.0
 # steps of the solver. None keeps number_of_iterations from gpe1d.config
 # (70000 steps = 2.045 ms, as 4.0-7.0).
 HOLD_TIME_MS = 2.0
+
+# 12.0: lattice hold between the drive and the image, in ms. The drive runs
+# for HOLD_TIME_MS, then the lattice stays static for LATTICE_HOLD_MS more, and
+# the cloud is imaged (measured) at the end, HOLD_TIME_MS + LATTICE_HOLD_MS
+# after the drive started. 0 images right after the drive, as 8.0-11.0.
+LATTICE_HOLD_MS = 2.0
+# The static lattice during the hold, as D in -D cos^2(kL x), in E_R.
+#   None: it stays where the drive ends. With DRIVE_WHOLE_CYCLES that is the
+#         lattice the drive started from: the loading lattice, -20 E_R
+#         (inverted, INITIAL_LATTICE_DEPTH_V0_ER) for INVERTED = True.
+#   A number: 10 = the normal 10 E_R lattice, -20 = the inverted 20 E_R
+#         lattice, 0 = no lattice (free expansion).
+LATTICE_HOLD_DEPTH_ER = None
+# 12.0: drive N = round(HOLD_TIME_MS x f) whole cycles, like the lab's
+# hw_KPModNCycle, so the drive ends where it started. The total time stays
+# HOLD_TIME_MS + LATTICE_HOLD_MS for every point (Cicero's latticehold step);
+# the hold takes up the difference of at most half a drive period. False:
+# drive exactly HOLD_TIME_MS. Used only with a lattice hold.
+DRIVE_WHOLE_CYCLES = True
 
 # Green walls: two repulsive Gaussian walls around the initial wavefunction,
 # added to the static potential (the drive does not modulate them). They are
@@ -259,12 +279,32 @@ def scan_settings(base: dict) -> dict:
         raise ValueError("HOLD_TIME_MS must be None or a positive number of milliseconds.")
     else:
         steps = int(round(float(HOLD_TIME_MS) * 1e-3 / step_s))
+    hold = LATTICE_HOLD_MS
+    if hold is None or hold == 0:
+        hold = None
+    elif isinstance(hold, bool) or not isinstance(hold, (int, float)) or not hold > 0:
+        raise ValueError("LATTICE_HOLD_MS must be 0, None or a positive number of milliseconds.")
+    elif HOLD_TIME_MS is None:
+        raise ValueError("LATTICE_HOLD_MS needs HOLD_TIME_MS (the drive time) to be set.")
+    else:
+        # 12.0: the run lasts the drive plus the hold; each point stops its
+        # drive after its own whole cycles (cuda_workflow_common.drive_hold).
+        steps = int(round((float(HOLD_TIME_MS) + float(hold)) * 1e-3 / step_s))
+    depth = LATTICE_HOLD_DEPTH_ER
+    if depth is not None and (isinstance(depth, bool) or not isinstance(depth, (int, float))
+                              or not math.isfinite(depth)):
+        raise ValueError("LATTICE_HOLD_DEPTH_ER must be None or a number of E_R.")
+    if not isinstance(DRIVE_WHOLE_CYCLES, bool):
+        raise ValueError("DRIVE_WHOLE_CYCLES must be True or False.")
     return {
         "grid_points": GRID_POINTS, "box_half_width_um": half, "absorber_starts_um": walls,
         "initial_cloud_width_um": float(width),
         "hold_time_ms": None if HOLD_TIME_MS is None else float(HOLD_TIME_MS),
         "number_of_iterations": steps,
         "simulated_hold_ms": None if step_s is None else steps * step_s * 1e3,
+        "lattice_hold_ms": None if hold is None else float(hold),
+        "lattice_hold_depth_er": None if hold is None or depth is None else float(depth),
+        "drive_whole_cycles": None if hold is None else DRIVE_WHOLE_CYCLES,
     }
 
 
@@ -277,6 +317,8 @@ def dataset_label(green_walls: dict | None) -> str:
         quasimomentum_values=(None if QUASIMOMENTUM_VALUES_KL is None
                               else list(QUASIMOMENTUM_VALUES_KL)),
         drive_phase_convention=DRIVE_PHASE_CONVENTION,
+        lattice_hold_ms=LATTICE_HOLD_MS or None,
+        lattice_hold_depth_er=LATTICE_HOLD_DEPTH_ER if LATTICE_HOLD_MS else None,
     )
 
 
@@ -381,7 +423,17 @@ def main() -> int:
             else "from gpe1d.config")
     simulated = (f" ({scan['simulated_hold_ms']:.4f} ms)"
                  if scan["simulated_hold_ms"] is not None else "")
-    print(f"Hold time: {hold} = {scan['number_of_iterations']:,} steps{simulated}.")
+    if scan["lattice_hold_ms"] is None:
+        print(f"Hold time: {hold} = {scan['number_of_iterations']:,} steps{simulated}; "
+              "imaged right after the drive.")
+    else:
+        cycles = ("N = round(drive time x f) whole cycles, ending where it started"
+                  if scan["drive_whole_cycles"] else "exactly")
+        lattice = ("where the drive ends" if scan["lattice_hold_depth_er"] is None
+                   else f"-({scan['lattice_hold_depth_er']:g} E_R) cos^2(kL x)")
+        print(f"Drive: {hold}, {cycles}. Then a {scan['lattice_hold_ms']:g} ms lattice hold, "
+              f"static at {lattice}; imaged at the end.")
+        print(f"Run length: {scan['number_of_iterations']:,} steps{simulated} for every point.")
     if spread:
         print(f"Quasimomentum spread: every grid point runs at q = "
               f"{', '.join(f'{q:g}' for q in quasimomenta)} hbar kL "
@@ -417,8 +469,14 @@ def main() -> int:
         if arguments.storage != "compact" or arguments.reference_loop:
             parser.error("ExtendedMetrics needs compact storage and the fused loop "
                          "(no --storage full, no --reference-loop).")
-        print("Extended metrics: on (GPU, Bloch-state Floquet model and classical ensemble "
-              "columns; level statistics on).")
+        if scan["lattice_hold_ms"] is not None:
+            # 12.0: the models drive until the end, so they do not apply to a hold.
+            print("Extended metrics: on (GPU columns; the Bloch-state Floquet model and "
+                  "classical ensemble columns stay empty with a lattice hold; level "
+                  "statistics on).")
+        else:
+            print("Extended metrics: on (GPU, Bloch-state Floquet model and classical ensemble "
+                  "columns; level statistics on).")
     else:
         print("Extended metrics: off")
     if level_statistics:
@@ -465,6 +523,11 @@ def main() -> int:
             "This executable predates the 7.0 extended metrics. Run BUILD_CUDA.bat, then "
             "VALIDATE_EXTENDED_CUDA.bat, before starting the scan."
         )
+    # An older solver would ignore drive_iterations and keep driving through the hold.
+    if scan["lattice_hold_ms"] is not None and build_info.get("drive_hold_version") != 1:
+        raise RuntimeError(
+            "This executable predates the 12.0 lattice hold. Run BUILD_CUDA.bat, then "
+            "VALIDATE_FAST_CUDA.bat, before starting the scan.")
     if lab and build_info.get("camera_profile_version") != 1:
         raise RuntimeError(
             "This executable predates the 11.0 camera profile. Run BUILD_CUDA.bat, then "
@@ -552,6 +615,12 @@ def main() -> int:
             "initial_cloud_width_um": scan["initial_cloud_width_um"],
             "hold_time_ms": scan["hold_time_ms"],
             "number_of_iterations": scan["number_of_iterations"],
+            # 12.0: lattice hold after the drive (None = imaged right after it),
+            # the hold lattice (None = where the drive ends) and whole cycles.
+            **({"lattice_hold_ms": scan["lattice_hold_ms"],
+                "lattice_hold_depth_er": scan["lattice_hold_depth_er"],
+                "drive_whole_cycles": scan["drive_whole_cycles"]}
+               if scan["lattice_hold_ms"] is not None else {}),
         },
         "analysis_contract": {
             "statistics_version": 1,

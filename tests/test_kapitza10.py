@@ -263,7 +263,8 @@ class ScanTests(unittest.TestCase):
             solver.chmod(0o755)
             results = root / "results"
             with (patch.object(runner, "SCRIPT_DIRECTORY", core),
-                  patch.multiple(runner, LabMeasurement=False, DRIVE_PHASE_CONVENTION="theory"),
+                  patch.multiple(runner, LabMeasurement=False, DRIVE_PHASE_CONVENTION="theory",
+                                 LATTICE_HOLD_MS=0),
                   patch.multiple(runner, INVERTED=True, NUMBER_OF_TABS=2, GRID_POINTS=65536,
                                  INITIAL_CLOUD_WIDTH_UM=30.0, HOLD_TIME_MS=None,
                                  QUASIMOMENTUM_VALUES_KL=[0.0, 0.1, 0.2],

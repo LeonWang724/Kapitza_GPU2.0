@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Callable
 
 from cuda_workflow_common import (
-    SCRIPT_DIRECTORY, generate_point_inputs, grid_points, point_drive_phase, point_grid,
+    SCRIPT_DIRECTORY, drive_hold, generate_point_inputs, grid_points, point_drive_phase,
+    point_grid,
     read_config, run_logged, sha256_file, update_config, utc_now, write_json_atomic,
 )
 from lab_measurement import measure, read_profile
@@ -152,6 +153,9 @@ def run_compact_sweep(
                         if drive_phase is not None:  # 5.0: sin(omega t + drive_phase)
                             record["drive_phase_radians"] = drive_phase
                             record["floquet_phase"] = float(generated["floquet_phase"])
+                        hold = drive_hold(run_grid, alpha, frequency, generated)
+                        if hold is not None:  # 12.0: drive, then hold the lattice
+                            record["drive_hold"] = hold
                         record["input_sha256"] = {name: sha256_file(path) for name, path in inputs.items()}
                         record["config_sha256"] = sha256_file(config_path)
                         points.append((config_path, summary_path, generated))
@@ -166,7 +170,13 @@ def run_compact_sweep(
                                         if spread else level_settings)
                             record["level_statistics"] = level_statistics_task(
                                 (grid["lattice_depth_v0_er"], alpha, frequency, settings))
-                    if extended:
+                    if extended and grid.get("lattice_hold_ms"):
+                        # 12.0: the Floquet and classical models drive until the
+                        # end, so with a lattice hold their columns stay empty;
+                        # the GPU columns are measured as usual.
+                        for record in records:
+                            record["extended_metrics"] = extended_metrics.empty_columns()
+                    elif extended:
                         # 6.0: the q = 0 Floquet model and the classical ensemble
                         # need only the parameters; same thread, as above.
                         hold, window = extended_metrics.run_timing(points[0][2], contract)

@@ -222,7 +222,9 @@ SolverResult run_reference_solver_1d(const ConfigData& config,
 
     for (int count = 0; count < config.number_of_iterations; ++count) {
         if (config.floquet_potential) {
-            floquet_factor = std::cos(config.floquet_omega * total_time + config.floquet_phase);
+            floquet_factor = drive_factor(config.floquet_omega, total_time, config.floquet_phase,
+                                          count, config.drive_iterations,
+                                          config.hold_floquet_factor);
             launch_update_floquet(static_potential.data(), floquet_base.data(),
                                   floquet_work.data(), potential.data(), points,
                                   floquet_factor, options.floquet_mode);
@@ -363,7 +365,8 @@ public:
           compact_(!configs.front().phase_metric_file.empty()),
           extended_(!configs.front().extended_metrics_file.empty()),
           sum_stride_(sum_stride(extended_)),
-          clock_(omegas(configs), configs.front().time_step, phases(configs)),
+          clock_(omegas(configs), configs.front().time_step, phases(configs),
+                 drive_stops(configs), hold_factors(configs)),
           psi_(total_),
           psi_half_(total_),
           psi_k_(total_),
@@ -566,6 +569,19 @@ private:
     static std::vector<double> phases(const std::vector<ConfigData>& configs) {
         std::vector<double> values;
         for (const ConfigData& config : configs) values.push_back(config.floquet_phase);
+        return values;
+    }
+
+    // 12.0: each system's drive stop (0 = drive throughout) and hold factor.
+    static std::vector<int> drive_stops(const std::vector<ConfigData>& configs) {
+        std::vector<int> values;
+        for (const ConfigData& config : configs) values.push_back(config.drive_iterations);
+        return values;
+    }
+
+    static std::vector<double> hold_factors(const std::vector<ConfigData>& configs) {
+        std::vector<double> values;
+        for (const ConfigData& config : configs) values.push_back(config.hold_floquet_factor);
         return values;
     }
 

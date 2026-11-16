@@ -37,6 +37,12 @@ struct ConfigData {
     // keeps the original cos(floquet_omega * t) bit for bit.
     double floquet_phase = 0.0;
     double floquet_amplitude = 1.0;
+    // 12.0: the drive runs for the first drive_iterations iterations; after
+    // that the Floquet factor stays at hold_floquet_factor, a static lattice
+    // until the end of the run (the hold between the drive and the image).
+    // 0 (default) drives every iteration, as before.
+    int drive_iterations = 0;
+    double hold_floquet_factor = 0.0;
 
     double dynamic_correlation_time = 0.0;
     double dynamic_amplitude = 0.0;

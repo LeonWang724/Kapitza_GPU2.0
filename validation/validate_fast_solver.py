@@ -77,6 +77,9 @@ def synthetic_config(directory: Path, case: dict, system: int, inputs: dict[str,
         "phase_metric_file": directory / "metric.json" if compact else "",
         "phase_metric_final_snapshot_count": 30, "phase_metric_cut_points_each_edge": 5,
     }
+    if case.get("drive_stop"):   # 12.0: drive, then hold the lattice
+        values.update({"drive_iterations": case["drive_stop"] + 7 * system,
+                       "hold_floquet_factor": repr(case["hold"] * (1.0 + 0.1 * system))})
     path = directory / "run.config"
     directory.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(f"{key}={value}\n" for key, value in values.items()), encoding="utf-8")
@@ -187,6 +190,12 @@ SYNTHETIC_CASES = [
      "interval": 10, "static": True},
     {"name": "full_snapshots_and_potentials", "storage": "full", "iterations": 95,
      "interval": 10, "stats": 7},
+    # 12.0: the drive stops partway (a different step per system) and the
+    # lattice holds at a constant Floquet factor until the end.
+    {"name": "compact_drive_then_hold", "storage": "compact", "iterations": 347,
+     "interval": 10, "drive_stop": 150, "hold": -0.75},
+    {"name": "full_drive_then_hold", "storage": "full", "iterations": 95,
+     "interval": 10, "stats": 7, "drive_stop": 40, "hold": 0.3},
 ]
 
 
@@ -200,7 +209,7 @@ def main() -> int:
     arguments = parser.parse_args()
     executable = locate_executable(arguments.executable)
     build = query_json(executable, "--version-json")
-    if build.get("fused_solver_version") != 1:
+    if build.get("fused_solver_version") != 1 or build.get("drive_hold_version") != 1:
         raise RuntimeError("Rebuild with BUILD_CUDA.bat before validating the fused solver.")
     timestamp = datetime.now(timezone.utc).strftime("fast_%Y%m%dT%H%M%S%fZ")
     results = (arguments.results or ROOT / "validation" / "results" / timestamp).resolve()
@@ -269,6 +278,27 @@ def main() -> int:
                            outputs(realistic[1]))
             record("realistic 65536-point grid with the 5.0 drive phase: fused == reference "
                    "(bitwise)", iterations=iterations)
+            # 12.0: the same inverted point, driven for half the steps and then
+            # held at the lattice the drive ends on.
+            held = {}
+            for mode in ("reference", "fused"):
+                held[mode] = realistic_config(work / "realistic" / f"held_{mode}", 1, iterations)
+                generated = read_config(held[mode])
+                stop = iterations // 2
+                update_config(held[mode], {
+                    "drive_iterations": stop,
+                    "hold_floquet_factor": repr(math.cos(
+                        float(generated["floquet_omega"]) * float(generated["time_step"]) * stop
+                        + float(generated["floquet_phase"])))})
+                run(executable, [held[mode]], arguments.device,
+                    work / "realistic" / f"held_{mode}.log",
+                    *(("--reference-loop",) if mode == "reference" else ()))
+            assert_bitwise("realistic, drive then hold", outputs(held["reference"]),
+                           outputs(held["fused"]))
+            if outputs(held["fused"]).get("metric") == outputs(realistic[1]).get("metric"):
+                raise AssertionError("The held run matches the fully driven one: the hold had no effect.")
+            record("realistic 65536-point grid, drive then hold (12.0): fused == reference "
+                   "(bitwise), differs from the fully driven run", iterations=iterations)
             batch =[realistic_config(work / "realistic" / f"batch_{system}", system, iterations)
                      for system in range(4)]
             run(executable, batch, arguments.device, work / "realistic" / "batch.log")

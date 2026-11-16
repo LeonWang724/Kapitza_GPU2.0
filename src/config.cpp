@@ -122,6 +122,8 @@ ConfigData read_config(const std::filesystem::path& config_path) {
     config.floquet_omega = double_value(config.raw_values, "floquet_omega", 0.0);
     config.floquet_phase = double_value(config.raw_values, "floquet_phase", 0.0);
     config.floquet_amplitude = double_value(config.raw_values, "floquet_amplitude", 1.0);
+    config.drive_iterations = int_value(config.raw_values, "drive_iterations", 0);
+    config.hold_floquet_factor = double_value(config.raw_values, "hold_floquet_factor", 0.0);
 
     config.dynamic_correlation_time =
         double_value(config.raw_values, "dp_correlation_time", 0.0);
@@ -197,6 +199,21 @@ void validate_1d_config(const ConfigData& config) {
     if (config.floquet_potential && config.floquet_potential_file.empty()) {
         throw std::runtime_error(
             "floquet_potential_file is required when floquet_potential=true.");
+    }
+    if (config.drive_iterations != 0) {
+        if (!config.floquet_potential || config.imaginary_time) {
+            throw std::runtime_error(
+                "drive_iterations needs a Floquet drive and real-time evolution.");
+        }
+        if (config.drive_iterations < 0 ||
+            config.drive_iterations > config.number_of_iterations) {
+            throw std::runtime_error(
+                "drive_iterations must be between 1 and number_of_iterations.");
+        }
+        if (config.raw_values.find("hold_floquet_factor") == config.raw_values.end() ||
+            !std::isfinite(config.hold_floquet_factor)) {
+            throw std::runtime_error("drive_iterations needs a finite hold_floquet_factor.");
+        }
     }
     if (!config.extended_metrics_file.empty()) {
         if (config.imaginary_time) {

@@ -1,4 +1,44 @@
-# Kapitza_GPU11.0
+# Kapitza_GPU12.0
+
+Version 12.0 keeps everything of 11.0 and adds a **lattice hold between the
+drive and the image**. Settings in
+`phase_diagram/simulation_core/run_phase_diagram_CUDA.py`; with
+`LATTICE_HOLD_MS = 0` a run is identical to 11.0. **Rebuild with
+`BUILD_CUDA.bat`** (the solver can now stop the drive partway through a run;
+build flag `drive_hold_version`), then run `VALIDATE_FAST_CUDA.bat`.
+
+```python
+HOLD_TIME_MS = 2.0           # the drive (the lab's 2 ms modulation)
+LATTICE_HOLD_MS = 2.0        # then a static lattice for 2 ms, then the image (0 = 11.0)
+LATTICE_HOLD_DEPTH_ER = None # hold lattice -D cos^2(kL x): None = where the drive ends
+DRIVE_WHOLE_CYCLES = True    # N = round(HOLD_TIME_MS x f) cycles, like hw_KPModNCycle
+```
+
+- **Drive, then hold.** Each point drives N = round(2 ms x f) whole cycles,
+  so the drive ends where it started; the lattice then stays static until the
+  cloud is imaged at HOLD_TIME_MS + LATTICE_HOLD_MS (4 ms, 136,890 steps) for
+  every point, like Cicero's fixed `latticehold` step (the hold takes up the
+  difference of at most half a drive period). The solver gets
+  `drive_iterations` and `hold_floquet_factor` per point
+  (`cuda_workflow_common.drive_hold`); from that step on the Floquet factor is
+  constant (`FloquetClock` in `src/fused_loop.h`, and the reference loop).
+- **The hold lattice.** None: where the drive ends, i.e. the loading lattice
+  (-20 E_R, inverted, for the lab's hardware drive phase), taken at the exact
+  end of the drive. A number D holds the static lattice -D cos^2(kL x): 10 =
+  the normal 10 E_R lattice, -20 = the inverted 20 E_R lattice, 0 = no lattice
+  (free expansion).
+- **What is measured.** Every metric and the camera profile are taken at the
+  end of the hold, as the lab images then. The 6.0 Bloch-state model (`q0_`)
+  and classical ensemble (`cl_`) columns drive until the end, so they stay
+  empty with a hold; the GPU columns and the level statistics are unchanged.
+  The strobe columns use the drive only. Dataset names gain `_Hold2ms`.
+- **Checks.** `tests/fused_solver_host_test.cpp` compares the fused loop with
+  the reference loop bit for bit with drive stops (252 cases);
+  `VALIDATE_FAST_CUDA.bat` does the same on the GPU, plus a realistic point
+  driven for half its steps and then held; `tests/test_kapitza12.py` checks
+  the stops, the hold lattice from the real generator and a two-tab scan.
+
+## 11.0
 
 Version 11.0 keeps everything of 10.0 and makes the simulation start, and be
 measured, like the experiment. Settings in

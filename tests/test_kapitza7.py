@@ -35,7 +35,7 @@ from phase_metric import smooth_density, smoothing_contract, smoothing_half_widt
 from test_parallel_sweep import FAKE_SOLVER  # noqa: E402
 
 # The 7.0 tests keep the 4.0-7.0 box, cloud and step count; 8.0 has its own tests.
-SETTINGS_7 = {"GRID_POINTS": 65536, "INITIAL_CLOUD_WIDTH_UM": 30.0, "HOLD_TIME_MS": None,
+SETTINGS_7 = {"GRID_POINTS": 65536, "INITIAL_CLOUD_WIDTH_UM": 30.0, "HOLD_TIME_MS": None, "LATTICE_HOLD_MS": 0,
               "QUASIMOMENTUM_VALUES_KL": None, "LabMeasurement": False,
               "DRIVE_PHASE_CONVENTION": "theory"}
 

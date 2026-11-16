@@ -122,7 +122,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_lab_measurement_needs_compact_storage_and_an_11_build(self):
         with (patch.object(sys, "argv", ["runner", "--plan", "--storage", "full"]),
-              patch.multiple(runner, QUASIMOMENTUM_VALUES_KL=None),
+              patch.multiple(runner, QUASIMOMENTUM_VALUES_KL=None, LATTICE_HOLD_MS=0),
               contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO())):
             with self.assertRaises(SystemExit):
                 runner.main()
@@ -132,6 +132,7 @@ class RunnerTests(unittest.TestCase):
                      "max_batch_systems": 64}
         with (patch.object(runner, "locate_executable", return_value=Path("solver")),
               patch.object(runner, "query_json", return_value=old_build),
+              patch.multiple(runner, LATTICE_HOLD_MS=0),
               patch.object(sys, "argv", ["runner"]), contextlib.redirect_stdout(io.StringIO())):
             with self.assertRaisesRegex(RuntimeError, "11.0 camera profile"):
                 runner.main()
@@ -297,7 +298,7 @@ class ScanTests(unittest.TestCase):
             results = root / "results"
             with (patch.object(runner, "SCRIPT_DIRECTORY", core),
                   patch.multiple(runner, INVERTED=True, NUMBER_OF_TABS=2, GRID_POINTS=262144,
-                                 HOLD_TIME_MS=None, QUASIMOMENTUM_VALUES_KL=[0.0, 0.1],
+                                 HOLD_TIME_MS=None, LATTICE_HOLD_MS=0, QUASIMOMENTUM_VALUES_KL=[0.0, 0.1],
                                  QUASIMOMENTUM_SPREAD_KL=0.05,
                                  LATTICE_DEPTH_V0_ER=10.0, INITIAL_LATTICE_DEPTH_V0_ER=20.0,
                                  ALPHA_VALUES=np.array([4.0, 8.0]),

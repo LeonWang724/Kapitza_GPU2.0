@@ -91,24 +91,26 @@ class SettingsTests(unittest.TestCase):
     def test_hold_time_becomes_steps(self):
         base = {"time_step": "0.5", "number_of_iterations": "70000"}
         with patch.multiple(runner, GRID_POINTS=262144, INITIAL_CLOUD_WIDTH_UM=30.0,
-                            HOLD_TIME_MS=2.0):
+                            HOLD_TIME_MS=2.0, LATTICE_HOLD_MS=0):
             scan = runner.scan_settings(base)
         step_ms = 0.5 * em.solver_time_unit_s() * 1e3
         self.assertEqual(scan["number_of_iterations"], round(2.0 / step_ms))
         self.assertAlmostEqual(scan["simulated_hold_ms"], 2.0, delta=step_ms)
         self.assertAlmostEqual(scan["absorber_starts_um"], 2110.6, delta=1.0)
-        with patch.multiple(runner, HOLD_TIME_MS=None):
+        with patch.multiple(runner, HOLD_TIME_MS=None, LATTICE_HOLD_MS=0):
             self.assertEqual(runner.scan_settings(base)["number_of_iterations"], 70000)
         for settings in ({"GRID_POINTS": 1001}, {"GRID_POINTS": True}, {"HOLD_TIME_MS": 0.0},
                          {"INITIAL_CLOUD_WIDTH_UM": -1.0},
                          {"GRID_POINTS": 4096, "INITIAL_CLOUD_WIDTH_UM": 30.0}):
-            with patch.multiple(runner, **settings), self.assertRaises(ValueError, msg=str(settings)):
+            with patch.multiple(runner, **{"LATTICE_HOLD_MS": 0, **settings}), \
+                    self.assertRaises(ValueError, msg=str(settings)):
                 runner.scan_settings(base)
 
     def test_plan_reports_box_cloud_and_hold(self):
         with (patch.object(runner, "locate_executable") as locate,
               patch.object(sys, "argv", ["runner", "--plan"]),
-              patch.multiple(runner, INITIAL_CLOUD_WIDTH_UM=30.0),     # the 8.0 default
+              patch.multiple(runner, INITIAL_CLOUD_WIDTH_UM=30.0,      # the 8.0 default
+                             LATTICE_HOLD_MS=0),
               contextlib.redirect_stdout(io.StringIO()) as output):
             self.assertEqual(runner.main(), 0)
         locate.assert_not_called()
@@ -186,6 +188,7 @@ class ScanTests(unittest.TestCase):
             results = root / "results"
             with (patch.object(runner, "SCRIPT_DIRECTORY", core),
                   patch.multiple(runner, INVERTED=True, NUMBER_OF_TABS=1, INITIAL_CLOUD_WIDTH_UM=40.0,
+                                 LATTICE_HOLD_MS=0,
                                  QUASIMOMENTUM_VALUES_KL=None, LabMeasurement=False,
                                  DRIVE_PHASE_CONVENTION="theory",
                                  LATTICE_DEPTH_V0_ER=10.0, INITIAL_LATTICE_DEPTH_V0_ER=20.0,

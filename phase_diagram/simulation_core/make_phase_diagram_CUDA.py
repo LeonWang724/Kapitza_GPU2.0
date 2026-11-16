@@ -166,7 +166,9 @@ def grid_parameter_label(grid: dict) -> str:
                                cloud_width_um=grid.get("initial_cloud_width_um"),
                                hold_time_ms=grid.get("hold_time_ms"),
                                quasimomentum_values=grid.get("quasimomentum_values_kl"),
-                               drive_phase_convention=grid.get("drive_phase_convention"))
+                               drive_phase_convention=grid.get("drive_phase_convention"),
+                               lattice_hold_ms=grid.get("lattice_hold_ms"),
+                               lattice_hold_depth_er=grid.get("lattice_hold_depth_er"))
 
 
 def automatic_plot_title(grid: dict, spread: dict | None = None) -> str:

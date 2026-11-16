@@ -26,6 +26,7 @@ void print_version_json() {
         << "  \"extended_metrics_version\": 2,\n"
         << "  \"density_smoothing_version\": 1,\n"
         << "  \"camera_profile_version\": 1,\n"
+        << "  \"drive_hold_version\": 1,\n"
         << "  \"max_batch_systems\": " << kMaxBatchSystems << ",\n"
         << "  \"port_version\": \"" << GPE_PORT_VERSION << "\",\n"
         << "  \"git_commit\": \"" << GPE_GIT_COMMIT << "\",\n"

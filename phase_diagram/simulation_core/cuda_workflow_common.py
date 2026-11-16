@@ -151,7 +151,55 @@ def generate_point_inputs(
     for path in inputs.values():
         if not path.is_file():
             raise FileNotFoundError(f"Generated input was not found: {path}")
+    # 12.0: drive for whole cycles, then hold the lattice until the image.
+    hold = drive_hold(grid, alpha, frequency, read_config(config_path))
+    if hold is not None:
+        update_config(config_path, {"drive_iterations": hold["drive_iterations"],
+                                    "hold_floquet_factor": repr(hold["hold_floquet_factor"])})
     return inputs
+
+
+def drive_hold(grid: dict, alpha: float, frequency: float, config: dict) -> dict | None:
+    """12.0: when and how a point's drive stops, or None without a lattice hold.
+
+    The drive lasts grid["hold_time_ms"], rounded to N = round(t f) whole
+    cycles when grid["drive_whole_cycles"] (the lab's hw_KPModNCycle), so it
+    ends where it started. From then until the end of the run (number_of_iterations,
+    the drive plus grid["lattice_hold_ms"]) the Floquet factor stays constant:
+    at its value where the drive ends (grid["lattice_hold_depth_er"] None), or
+    so that the static lattice is -D cos^2(kL x) with D = lattice_hold_depth_er
+    (the generated potential is -V0 [1 + alpha factor] cos^2(kL x)).
+    """
+    hold_ms = grid.get("lattice_hold_ms")
+    if not hold_ms:
+        return None
+    from extended_metrics import solver_time_unit_s
+    step = float(config["time_step"])
+    step_s = step * solver_time_unit_s()
+    drive_s = float(grid["hold_time_ms"]) * 1e-3
+    cycles = None
+    if grid.get("drive_whole_cycles", True) and frequency > 0:
+        cycles = max(1, int(round(drive_s * float(frequency))))
+        drive_s = cycles / float(frequency)
+    total = int(float(config["number_of_iterations"]))
+    stop = min(max(1, int(round(drive_s / step_s))), total)
+    depth = grid.get("lattice_hold_depth_er")
+    if depth is None:
+        # The drive's value at its exact end (N / f), not at the time step
+        # nearest to it: with whole cycles exactly where it started.
+        factor = math.cos(float(config["floquet_omega"]) * (drive_s / solver_time_unit_s())
+                          + float(config.get("floquet_phase", 0.0)))
+    else:
+        v0 = float(grid["lattice_depth_v0_er"])
+        if alpha == 0:
+            if float(depth) != v0:
+                raise ValueError("Without a drive (alpha = 0) the hold lattice can only be V0.")
+            factor = 0.0
+        else:
+            factor = (float(depth) / v0 - 1.0) / float(alpha)
+    return {"drive_iterations": stop, "drive_cycles": cycles, "drive_time_s": stop * step_s,
+            "hold_time_s": (total - stop) * step_s, "hold_floquet_factor": factor,
+            "hold_lattice_er": float(grid["lattice_depth_v0_er"]) * (1.0 + float(alpha) * factor)}
 
 
 def parameter_token(value: float) -> str:
@@ -173,6 +221,8 @@ def phase_dataset_label(
     hold_time_ms: float | None = None,
     quasimomentum_values: list[float] | None = None,
     drive_phase_convention: str | None = None,
+    lattice_hold_ms: float | None = None,
+    lattice_hold_depth_er: float | None = None,
 ) -> str:
     """Build the shared descriptive label used by datasets and analysis files.
 
@@ -183,6 +233,8 @@ def phase_dataset_label(
     points, 30 um) and the hold time when it is set. 10.0 spread scans name
     their range of simulated quasimomenta instead of a single q. 11.0 adds
     _PhaseHw when the drive starts at the loading lattice (hardware phase).
+    12.0 adds _Hold<ms>ms for a lattice hold between the drive and the image,
+    and _HoldD<E_R>ER when the hold lattice is set instead of where the drive ends.
     """
     if inverted is None:
         start = f"Phase_{parameter_token(phase_radians)}rad"
@@ -214,6 +266,10 @@ def phase_dataset_label(
         label += f"_T{parameter_token(hold_time_ms)}ms"
     if drive_phase_convention == "hardware":
         label += "_PhaseHw"
+    if lattice_hold_ms:
+        label += f"_Hold{parameter_token(lattice_hold_ms)}ms"
+        if lattice_hold_depth_er is not None:
+            label += f"_HoldD{parameter_token(lattice_hold_depth_er)}ER"
     return label
 
 

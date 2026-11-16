@@ -34,7 +34,7 @@ from phase_metric import METRIC_NAME
 SETTINGS_6 = {"ExtendedMetrics": False, "INITIAL_QUASIMOMENTUM_KL": 0.0, "DensitySmoothing_um": 0.0,
               "GRID_POINTS": 65536, "INITIAL_CLOUD_WIDTH_UM": 30.0, "HOLD_TIME_MS": None,
               "QUASIMOMENTUM_VALUES_KL": None, "LabMeasurement": False,
-              "DRIVE_PHASE_CONVENTION": "theory"}
+              "DRIVE_PHASE_CONVENTION": "theory", "LATTICE_HOLD_MS": 0}
 
 
 # A stand-in executable exercises real Python subprocesses, configs and files.
@@ -46,7 +46,7 @@ if "--version-json" in sys.argv:
     print(json.dumps({"compact_phase_metric_version": 1, "phase_statistics_version": 1,
                       "fused_solver_version": 1, "drive_phase_version": 1,
                       "extended_metrics_version": 2, "density_smoothing_version": 1,
-                      "camera_profile_version": 1,
+                      "camera_profile_version": 1, "drive_hold_version": 1,
                       "max_batch_systems": 64})); raise SystemExit(0)
 if "--device-info" in sys.argv:
     print(json.dumps({"device_index": 0, "name": "Test solver"})); raise SystemExit(0)
@@ -151,7 +151,10 @@ def event(kind):
     for path, config in zip(paths, configs):
         data = json.dumps({"kind": kind, "time": time.monotonic(), "pid": os.getpid(),
                            "config": path, "input": config["initial_state_file"],
-                           "batch": len(paths), "options": options}) + "\\n"
+                           "batch": len(paths), "options": options,
+                           "number_of_iterations": config.get("number_of_iterations"),
+                           "drive_iterations": config.get("drive_iterations"),
+                           "hold_floquet_factor": config.get("hold_floquet_factor")}) + "\\n"
         fd = os.open(events, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         os.write(fd, data.encode()); os.close(fd)
 

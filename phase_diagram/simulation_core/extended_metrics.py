@@ -312,6 +312,12 @@ def gpu_summary(path: Path, config: dict, contract: dict) -> dict:
     # Drive phase relative to its value at t = 0.
     drive = float(config.get("floquet_omega", 0.0)) * time_solver
     strobe = late & (np.abs((drive + math.pi) % (2.0 * math.pi) - math.pi) < STROBE_HALF_WIDTH)
+    stop = int(float(config.get("drive_iterations", 0) or 0))
+    if stop > 0:
+        # 12.0: strobe only while the drive runs, over the second half of the drive.
+        driving = iteration < stop
+        strobe = (driving & (time_solver >= 0.5 * stop * step)
+                  & (np.abs((drive + math.pi) % (2.0 * math.pi) - math.pi) < STROBE_HALF_WIDTH))
     return {
         "pendulum_cos": _mean(values["pendulum_cos"], final),
         "pendulum_cos_strobe": _mean(values["pendulum_cos"], strobe),

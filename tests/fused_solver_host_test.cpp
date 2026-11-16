@@ -8,6 +8,7 @@
 #include "phase_metric.h"
 #include "split_step_math.cuh"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -144,10 +145,21 @@ struct Case {
     bool floquet = true;
     std::vector<double> omegas{1.7};
     std::vector<double> phases{};  // one per system; empty means 0 (the 4.0 drive)
+    // 12.0: per-system drive stop (0 = drive throughout) and hold factor.
+    std::vector<int> stops{};
+    std::vector<double> holds{};
 };
 
 double phase_of(const Case& test, std::size_t system) {
     return test.phases.empty() ? 0.0 : test.phases[system];
+}
+
+int stop_of(const Case& test, std::size_t system) {
+    return test.stops.empty() ? 0 : test.stops[system];
+}
+
+double hold_of(const Case& test, std::size_t system) {
+    return test.holds.empty() ? 0.0 : test.holds[system];
 }
 
 struct SystemInputs {
@@ -184,7 +196,7 @@ bool wants_state(const Case& test, const PhaseMetricAccumulator& metric, int cou
 
 // The real-time loop of run_reference_solver_1d, recording every iteration.
 Observations reference_run(const Case& test, const SystemInputs& inputs, double omega,
-                           double phase) {
+                           double phase, int stop = 0, double hold = 0.0) {
     const int n = test.points;
     Field psi = inputs.psi, psi_half(n), psi_k(n);
     Field potential = inputs.static_potential;
@@ -195,7 +207,10 @@ Observations reference_run(const Case& test, const SystemInputs& inputs, double 
     Observations observed;
     for (int count = 0; count < test.iterations; ++count) {
         if (test.floquet) {
-            floquet_factor = std::cos(omega * total_time + phase);
+            // The reference loop's own stop rule, written out (not drive_factor),
+            // so the clock is checked against an independent implementation.
+            floquet_factor = (stop > 0 && count >= stop) ? hold
+                                                         : std::cos(omega * total_time + phase);
             original_update_floquet(inputs.static_potential, inputs.floquet_base, potential,
                                     floquet_factor);
             total_time += test.time_step;
@@ -219,7 +234,7 @@ public:
         : test_(test),
           systems_(static_cast<int>(inputs.size())),
           n_(test.points),
-          clock_(test.omegas, test.time_step, test.phases),
+          clock_(test.omegas, test.time_step, test.phases, test.stops, test.holds),
           metric_(test.iterations, test.save_every, test.window, 0),
           propagator_(original_k_propagator(n_, test.step_x, test.time_step)) {
         for (const SystemInputs& system : inputs) {
@@ -348,7 +363,8 @@ void run_case(const Case& test) {
     const int n = test.points;
     for (std::size_t system = 0; system < inputs.size(); ++system) {
         const Observations reference =
-            reference_run(test, inputs[system], test.omegas[system], phase_of(test, system));
+            reference_run(test, inputs[system], test.omegas[system], phase_of(test, system),
+                          stop_of(test, system), hold_of(test, system));
         const std::size_t offset = system * static_cast<std::size_t>(n);
         for (const auto& [count, state] : fused.states) {
             const std::vector<Field>& expected = reference.at(count);
@@ -432,6 +448,10 @@ int main() {
                     // 5.0 drive phases: sin(omega t) = cos(omega t - pi/2), and
                     // the inverted phase arcsin(-2/alpha) - pi/2 for alpha = 4.
                     for (bool phased : {false, true}) {
+                      // 12.0: the drive stops partway (a different step per
+                      // system) and the lattice holds at a constant factor.
+                      for (bool held : {false, true}) {
+                        if (held && !floquet) continue;
                         Case test = schedule;
                         test.beta = beta;
                         test.floquet = floquet;
@@ -441,12 +461,21 @@ int main() {
                                                             -2.0943951023931957, 0.4};
                             test.phases.assign(drive.begin(), drive.begin() + omegas.size());
                         }
+                        if (held) {
+                            const std::vector<double> hold{-0.75, 0.3, -1.0 / 3.0};
+                            for (std::size_t system = 0; system < omegas.size(); ++system) {
+                                test.stops.push_back(
+                                    std::max(1, schedule.iterations / 2 + static_cast<int>(system)));
+                                test.holds.push_back(hold[system]);
+                            }
+                        }
                         test.name = schedule.name + " beta=" + std::to_string(beta) +
                                     (std::signbit(beta) ? "(-0)" : "") +
                                     (floquet ? " floquet" : " static") +
                                     " systems=" + std::to_string(omegas.size()) +
-                                    (phased ? " phased" : "");
+                                    (phased ? " phased" : "") + (held ? " held" : "");
                         cases.push_back(test);
+                      }
                     }
                 }
             }
