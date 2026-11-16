@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from compact_sweep import run_compact_sweep
 from full_sweep import run_full_sweep
 from parallel_sweep import print_assignments, run_parallel_sweep, split_point_ranges
 from quasimomentum_spread import COVERAGE_WARNING, describe, spread_weights, validate_values
+from lab_measurement import validate_camera, write_profiles_csv
 from cuda_workflow_common import (
     PORT_ROOT,
     RESULTS_DIRECTORY,
@@ -51,9 +53,18 @@ INITIAL_LATTICE_DEPTH_V0_ER = 40.0
 # with alpha the experiment's alpha*beta, and the atoms start in the ground
 # state of the lattice at t = 0 at INITIAL_LATTICE_DEPTH_V0_ER:
 #   False: non-inverted, phi = 0; atoms at the bottom (cos^2 = 1).
-#   True:  inverted, phi = arcsin(-2/alpha) for each alpha, so the lattice at
-#          t = 0 is flipped and the atoms start on top; needs every alpha >= 2.
+#   True:  inverted, the lattice at t = 0 is flipped and the atoms start on top.
 INVERTED = False
+
+# 11.0: where in its cycle the drive starts.
+#   "hardware": as the lab's AWG (KpPredistortion.getPhaseTarget in MMUser-li):
+#       phi = arcsin((+-V_init / V0 - 1) / alpha), minus when inverted, so the
+#       drive starts exactly at the loading lattice (-20 E_R inverted for 20
+#       E_R loading into 10 E_R) with no jump. Needs every alpha >= 3 then.
+#   "theory": phi = arcsin(-2/alpha) inverted, 0 non-inverted: the lattice
+#       jumps from the loading depth to -+V0 at t = 0 (5.0-10.0, and the lab's
+#       theory script kp_PhaseDiagramRealSpace.m).
+DRIVE_PHASE_CONVENTION = "hardware"
 
 # 7.0: starting quasimomentum q of every atom, in units of hbar kL (-1 < q < 1).
 # One setting for every model: the GPU starting state (the lowest-band Bloch
@@ -96,10 +107,11 @@ GRID_POINTS = 262144
 # 8.0: the starting cloud: standard deviation of |psi|^2 of the Gaussian
 # envelope, in um (the atom cloud along the lattice, not a beam waist). The
 # central window (central_fraction) is two of these widths.
-# 9.0: 340, the experiment's cloud: trial 11243's StdDev2 is 340-370 um where
-# the drive barely acts (alpha = 4). 30 is the cloud of 4.0-8.0. Set it from
-# the lab's unmodulated reference trial when you have it.
-INITIAL_CLOUD_WIDTH_UM = 340.0
+# 11.0: 35, measured in the lab's images (Gaussian sigma 38-42 um in the
+# undriven lattice trial 10084, 28-45 um in the weakest-drive shots of trials
+# 10098 and 10366; measure_lab_images.py). 9.0-10.0 used 340, which matched the
+# lab's StdDev2 noise floor rather than the atoms; 4.0-8.0 used 30.
+INITIAL_CLOUD_WIDTH_UM = 35.0
 
 # 8.0: hold time with the drive on, in ms (the lab's t_mod), turned into time
 # steps of the solver. None keeps number_of_iterations from gpe1d.config
@@ -135,6 +147,31 @@ LevelStatisticsPlaneWaveCutoff = 40    # plane waves |n| <= n_max, i.e. 2 n_max 
 # 7.0 adds the cloud width from 4 um pixels (sigma_x_4um_um).
 ExtendedMetrics = True
 
+# 11.0: measure every point as the lab's camera analysis does (lab_measurement.py):
+# the GPU writes the final cloud in camera pixels, and lab_stddev2_um is
+# kpAnalysis.m's StdDev2 of it on the lab's camera window with the lab's camera
+# noise (columns lab_stddev2_um, lab_stddev_um, lab_stddev2_no_noise_um,
+# camera_width_um, lab_window_fraction, camera_fov_fraction, and the file
+# camera_profiles.csv). Needs compact storage and an 11.0 build.
+LabMeasurement = True
+# The lab's camera: Andor iXon 888 (ANDORTOP in MMUser-li's mmConfig.m),
+# 13 um pixels behind a magnification of 3.338 (3.895 um at the atoms), 1024
+# pixels (3.99 mm); the AdData crop is sensor rows 120-780 along the lattice
+# with the cloud at row ~456 (kpAnalysis.m). Noise: measure_lab_images.py on
+# trial 10366. Values not given here take lab_measurement.DEFAULT_CAMERA.
+LAB_CAMERA = {
+    "pixel_um": 13.0 / 3.337676782237963,
+    "sensor_pixels": 1024,
+    "cloud_sensor_row": 455.5,
+    "roi_sensor_rows": [120, 780],
+    "lab_um_per_pixel": 4.0,             # kpAnalysis.m's 4e-6 m per pixel
+    "edge_fraction": 0.10,               # computeStDevWithBgSub's baseline
+    "noise_floor": 0.0,                  # kpAnalysis.m noiseFloor
+    "noise_per_pixel_over_signal": 3.78e-4,
+    "noise_draws": 200,
+    "window": "roi",                     # "roi" = the AdData crop, "sensor" = the whole field
+}
+
 # Number of simultaneous terminal tabs sharing this grid. Any positive integer
 # works; leftover points are distributed one each to the first tabs.
 # 1 runs here. Values greater than 1 open Windows Terminal tabs (or windows).
@@ -162,6 +199,13 @@ def green_wall_settings() -> tuple[dict | None, float | None]:
                                 envelope_sigma_m=float(INITIAL_CLOUD_WIDTH_UM) * 1e-6)
     fraction = checked.pop("initial_fraction_between_walls")
     return checked, fraction
+
+
+def lab_settings() -> dict | None:
+    """11.0: the validated camera settings, or None when LabMeasurement is off."""
+    if not isinstance(LabMeasurement, bool):
+        raise ValueError("LabMeasurement must be True or False.")
+    return validate_camera(LAB_CAMERA) if LabMeasurement else None
 
 
 def quasimomentum_settings() -> dict | None:
@@ -232,6 +276,7 @@ def dataset_label(green_walls: dict | None) -> str:
         hold_time_ms=HOLD_TIME_MS,
         quasimomentum_values=(None if QUASIMOMENTUM_VALUES_KL is None
                               else list(QUASIMOMENTUM_VALUES_KL)),
+        drive_phase_convention=DRIVE_PHASE_CONVENTION,
     )
 
 
@@ -285,6 +330,7 @@ def main() -> int:
                 or not -1.0 < INITIAL_QUASIMOMENTUM_KL < 1.0:
             raise ValueError("INITIAL_QUASIMOMENTUM_KL must be a number with -1 < q < 1.")
         spread = quasimomentum_settings()
+        lab = lab_settings()
         base_values = read_config(SCRIPT_DIRECTORY / "gpe1d.config")
         smoothing = smoothing_contract(DensitySmoothing_um, float(base_values["step_x"]),
                                        GRID_SPACING_M)
@@ -295,24 +341,31 @@ def main() -> int:
                                 LevelStatisticsPlaneWaveCutoff)
                             if CalculateLevelStatistics or ExtendedMetrics else None)
         # Checks INVERTED and, when inverted, that every alpha >= 2.
-        drive_phases = [experiment_drive_phase(alpha, INVERTED) for alpha in ALPHA_VALUES]
+        drive_phases = [experiment_drive_phase(alpha, INVERTED, DRIVE_PHASE_CONVENTION,
+                                               LATTICE_DEPTH_V0_ER, INITIAL_LATTICE_DEPTH_V0_ER)
+                        for alpha in ALPHA_VALUES]
     except ValueError as error:
         parser.error(str(error))
     # Snapshot output and the reference loop keep one point per solver run.
     batch = 1 if arguments.storage == "full" or arguments.reference_loop else arguments.batch
     if spread and arguments.storage != "compact":
         parser.error("QUASIMOMENTUM_VALUES_KL needs compact storage (no --storage full).")
+    if lab and (arguments.storage != "compact" or arguments.reference_loop):
+        parser.error("LabMeasurement needs compact storage and the fused loop "
+                     "(no --storage full, no --reference-loop).")
     quasimomenta = spread["values_kl"] if spread else [float(INITIAL_QUASIMOMENTUM_KL)]
     total = len(ALPHA_VALUES) * len(DRIVE_FREQUENCY_HZ_VALUES) * len(quasimomenta)
     assignments = split_point_ranges(total, arguments.tabs)
     print_assignments(total, arguments.tabs, assignments)
     if batch > 1:
         print(f"Each tab simulates up to {batch} grid points at a time as one GPU batch.")
-    if INVERTED:
-        print(f"Loading: inverted. Drive sin(omega t + phi), phi = arcsin(-2/alpha) from "
-              f"{max(drive_phases):.4g} to {min(drive_phases):.4g} rad; atoms start on top.")
-    else:
-        print("Loading: non-inverted. Drive sin(omega t); atoms start at the bottom.")
+    start = (f"the drive starts at the loading lattice, {'-' if INVERTED else '+'}"
+             f"{INITIAL_LATTICE_DEPTH_V0_ER:g} E_R (hardware)" if DRIVE_PHASE_CONVENTION == "hardware"
+             else f"the lattice jumps to {'-' if INVERTED else '+'}{LATTICE_DEPTH_V0_ER:g} E_R "
+                  "at t = 0 (theory)")
+    print(f"Loading: {'inverted, atoms start on top' if INVERTED else 'non-inverted'}, "
+          f"{INITIAL_LATTICE_DEPTH_V0_ER:g} E_R. Drive sin(omega t + phi), phi from "
+          f"{max(drive_phases):.4g} to {min(drive_phases):.4g} rad; {start}.")
     if green_walls:
         print(f"Green walls: {green_walls['height_er']:g} E_R high, sigma "
               f"{green_walls['sigma_um']:g} um, centres at +/-{green_walls['gap_um'] / 2:g} um; "
@@ -342,6 +395,17 @@ def main() -> int:
     else:
         print(f"Initial quasimomentum: q = {float(INITIAL_QUASIMOMENTUM_KL):g} hbar kL for every "
               "atom (GPU start, Bloch-state model, level statistics).")
+    if lab:
+        rows = lab["roi_sensor_rows"]
+        print(f"Lab measurement: camera {lab['sensor_pixels']} pixels of {lab['pixel_um']:.3f} um "
+              f"({lab['sensor_pixels'] * lab['pixel_um'] / 1e3:.2f} mm), cloud at row "
+              f"{lab['cloud_sensor_row']:g}; StdDev2 window "
+              + (f"rows {rows[0]}-{rows[1]} ({rows[1] - rows[0] + 1} px)" if lab["window"] == "roi"
+                 else "the whole sensor")
+              + f", noise {lab['noise_per_pixel_over_signal']:g} of the signal per pixel, "
+              f"{lab['noise_draws']} draws.")
+    else:
+        print("Lab measurement: off")
     if smoothing:
         if arguments.reference_loop:
             parser.error("DensitySmoothing_um needs the fused loop (no --reference-loop).")
@@ -401,6 +465,10 @@ def main() -> int:
             "This executable predates the 7.0 extended metrics. Run BUILD_CUDA.bat, then "
             "VALIDATE_EXTENDED_CUDA.bat, before starting the scan."
         )
+    if lab and build_info.get("camera_profile_version") != 1:
+        raise RuntimeError(
+            "This executable predates the 11.0 camera profile. Run BUILD_CUDA.bat, then "
+            "VALIDATE_EXTENDED_CUDA.bat, before starting the scan.")
     if smoothing and arguments.storage == "compact" \
             and build_info.get("density_smoothing_version") != 1:
         raise RuntimeError(
@@ -465,6 +533,8 @@ def main() -> int:
             # arcsin(-2/alpha) per point when inverted (see INVERTED above).
             "inverted": INVERTED,
             "drive": "sin(omega t + phi)",
+            # 11.0: "hardware" (drive starts at the loading lattice) or "theory".
+            "drive_phase_convention": DRIVE_PHASE_CONVENTION,
             # None, or the walls' height (E_R), sigma (um) and centre gap (um).
             "green_walls": green_walls,
             # 7.0: starting quasimomentum (units of kL) and density smoothing (um).
@@ -502,6 +572,8 @@ def main() -> int:
             "density_smoothing": smoothing,
             # None, or the 10.0 quasimomentum spread (quasimomentum_spread.py).
             "quasimomentum_spread": spread,
+            # None, or the 11.0 camera and analysis settings (lab_measurement.py).
+            "lab_measurement": lab,
             "normalization": "none",
             "frequency_axis_inverted": True,
             "colormap": "inferno",
@@ -531,6 +603,15 @@ def main() -> int:
         manifest["status"] = "completed"
         manifest["finished_utc"] = utc_now()
         write_json_atomic(manifest_path, manifest)
+    if lab and arguments.storage == "compact":
+        # 11.0: every run's final camera profile in one file, for the plot tools.
+        saved = json.loads((results_root / "run_manifest.json").read_text(encoding="utf-8"))
+        journal = results_root / saved.get("point_results_file", "point_results.jsonl")
+        if saved.get("status") == "completed" and journal.is_file():
+            records = [json.loads(line) for line in
+                       journal.read_text(encoding="utf-8").splitlines() if line.strip()]
+            count = write_profiles_csv(results_root / "camera_profiles.csv", records, lab)
+            print(f"Camera profiles: {results_root / 'camera_profiles.csv'} ({count} runs)")
     print(f"\nCompleted {manifest['completed_points']:,} points.")
     print(f"Dataset: {results_root}")
     if arguments.storage == "compact":

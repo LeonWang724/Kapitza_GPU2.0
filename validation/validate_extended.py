@@ -12,6 +12,8 @@ saved snapshot (extended_metrics.reference_extended_sums), to --rtol of the
 summed magnitudes of each column's terms: the scale of the rounding error,
 which stays finite where a sum cancels to zero (odd moments of the
 symmetric cloud). Then the CSV summary is computed from each file.
+11.0: every point also writes its final cloud in camera pixels, which must
+match NumPy's binning of the final snapshot (the last of the 601 steps).
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from cuda_workflow_common import (  # noqa: E402
     update_config, write_json_atomic,
 )
 import extended_metrics  # noqa: E402
+import lab_measurement  # noqa: E402
 from phase_metric import smooth_density, smoothing_half_width  # noqa: E402
 
 # One GPU batch per loading; every point of a batch shares the site offset.
@@ -86,6 +89,9 @@ def prepare(directory: Path, point: dict, inverted: bool, iterations: int,
         "dp_save_potential": "false",
         **extended_metrics.solver_settings(grid, point["alpha"]),
         "extended_metrics_file": directory / "extended.csv",
+        # 11.0: the final cloud in camera pixels.
+        "camera_profile_file": directory / "camera_profile.json",
+        "camera_pixel_width": repr(lab_measurement.validate_camera(None)["pixel_width_solver"]),
     })
     if smoothing_um:
         update_config(config, {"density_smoothing_width":
@@ -136,17 +142,39 @@ def compare(directory: Path, config: dict, rtol: float) -> float:
     return float(difference.max())
 
 
+def compare_camera_profile(directory: Path, config: dict, rtol: float) -> float:
+    """The GPU's final camera profile against NumPy's binning of the final snapshot."""
+    iterations = int(float(config["number_of_iterations"]))
+    interval = int(float(config["save_every_nth_iteration"]))
+    last = (iterations - 1) // interval * interval
+    if last != iterations - 1:
+        raise ValueError("The final state is saved only when iterations = 1 + a multiple "
+                         "of save_every_nth_iteration (use --iterations 601).")
+    psi = load(directory / "out" / f"{last:016d}.h5")
+    gpu = lab_measurement.read_profile(directory / "camera_profile.json")
+    first, mass = lab_measurement.camera_profile(np.abs(psi) ** 2, float(config["step_x"]),
+                                                 float(config["camera_pixel_width"]))
+    if gpu["first_pixel"] != first or len(gpu["mass"]) != mass.size:
+        raise AssertionError(f"{directory.name}: camera profile has a different pixel layout.")
+    difference = float(np.max(np.abs(np.asarray(gpu["mass"]) - mass)) / mass.sum())
+    if not difference <= rtol:
+        raise AssertionError(f"{directory.name}: camera profile differs from NumPy by "
+                             f"{difference:.3g} of the atoms.")
+    return difference
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--executable", type=Path)
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--results", type=Path)
-    parser.add_argument("--iterations", type=int, default=600)
+    parser.add_argument("--iterations", type=int, default=601)
     parser.add_argument("--rtol", type=float, default=1e-9)
     arguments = parser.parse_args()
     executable = locate_executable(arguments.executable)
     build = query_json(executable, "--version-json")
-    if build.get("extended_metrics_version") != 2 or build.get("density_smoothing_version") != 1:
+    if build.get("extended_metrics_version") != 2 or build.get("density_smoothing_version") != 1 \
+            or build.get("camera_profile_version") != 1:
         raise RuntimeError("Rebuild with BUILD_CUDA.bat before validating the extended metrics.")
     timestamp = datetime.now(timezone.utc).strftime("extended_%Y%m%dT%H%M%S%fZ")
     results = (arguments.results or ROOT / "validation" / "results" / timestamp).resolve()
@@ -173,17 +201,20 @@ def main() -> int:
                 for point, path in zip(points, configs):
                     config = read_config(path)
                     worst = compare(path.parent, config, arguments.rtol)
+                    camera = compare_camera_profile(path.parent, config, arguments.rtol)
                     summary = extended_metrics.gpu_summary(path.parent / "extended.csv",
                                                            config, contract)
                     check = {"name": f"{point_label(loading, point)}, {grid_points} points, "
                                      f"{width:g} um cloud, smoothing {smoothing_um:g} um, "
                                      f"q = {quasimomentum:g} kL: extended sums == NumPy",
                              "status": "passed", "max_relative_difference": worst,
+                             "camera_profile_difference": camera,
                              "pendulum_cos": summary["pendulum_cos"],
                              "site_ipr": summary["site_ipr"], "order_0": summary["order_0"]}
                     report["checks"].append(check)
                     write_json_atomic(results / "report.json", report)
                     print(f"PASS {check['name']} (max relative difference {worst:.2g}; "
+                          f"camera profile {camera:.2g}; "
                           f"pendulum_cos {summary['pendulum_cos']:+.3f})", flush=True)
             report["status"] = "passed"
         except Exception as error:

@@ -19,6 +19,7 @@ from cuda_workflow_common import (
     SCRIPT_DIRECTORY, generate_point_inputs, grid_points, point_drive_phase, point_grid,
     read_config, run_logged, sha256_file, update_config, utc_now, write_json_atomic,
 )
+from lab_measurement import measure, read_profile
 from level_statistics import level_statistics_task
 from phase_metric import csv_fields, csv_row, expected_sampling, validate_summary
 
@@ -53,6 +54,7 @@ def run_compact_sweep(
     level_settings = contract.get("level_statistics")
     extended = contract.get("extended_metrics")
     spread = contract.get("quasimomentum_spread")       # 10.0: None for a single q
+    lab = contract.get("lab_measurement")               # 11.0: None when off
     if extended:
         import extended_metrics
     manifest["simulation_config"] = read_config(base_config)
@@ -134,6 +136,11 @@ def run_compact_sweep(
                             update_config(config_path, {
                                 "density_smoothing_width": repr(smoothing["width_solver_units"]),
                             })
+                        if lab:  # 11.0: the final cloud in camera pixels
+                            update_config(config_path, {
+                                "camera_profile_file": point_work / "camera_profile.json",
+                                "camera_pixel_width": repr(lab["pixel_width_solver"]),
+                            })
                         if extended:  # 6.0: the solver records the extended sums
                             update_config(config_path, {
                                 **extended_metrics.solver_settings(run_grid, alpha),
@@ -202,6 +209,11 @@ def run_compact_sweep(
                         summary = json.loads(summary_path.read_text(encoding="utf-8"))
                         value, _ = validate_summary(summary, generated, contract)
                         record["metric_summary"] = summary
+                        if lab:
+                            profile = read_profile(summary_path.parent / "camera_profile.json")
+                            record["camera_profile"] = profile
+                            record["lab_measurement"] = measure(profile, lab,
+                                                                seed=record["run_index"] + 1)
                         if extended:
                             record["extended_metrics"].update(extended_metrics.gpu_summary(
                                 summary_path.parent / "extended.csv", generated, contract))

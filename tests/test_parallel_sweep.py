@@ -33,7 +33,8 @@ from phase_metric import METRIC_NAME
 # quasimomentum, smoothing and extended metrics, which have their own tests.
 SETTINGS_6 = {"ExtendedMetrics": False, "INITIAL_QUASIMOMENTUM_KL": 0.0, "DensitySmoothing_um": 0.0,
               "GRID_POINTS": 65536, "INITIAL_CLOUD_WIDTH_UM": 30.0, "HOLD_TIME_MS": None,
-              "QUASIMOMENTUM_VALUES_KL": None}
+              "QUASIMOMENTUM_VALUES_KL": None, "LabMeasurement": False,
+              "DRIVE_PHASE_CONVENTION": "theory"}
 
 
 # A stand-in executable exercises real Python subprocesses, configs and files.
@@ -45,6 +46,7 @@ if "--version-json" in sys.argv:
     print(json.dumps({"compact_phase_metric_version": 1, "phase_statistics_version": 1,
                       "fused_solver_version": 1, "drive_phase_version": 1,
                       "extended_metrics_version": 2, "density_smoothing_version": 1,
+                      "camera_profile_version": 1,
                       "max_batch_systems": 64})); raise SystemExit(0)
 if "--device-info" in sys.argv:
     print(json.dumps({"device_index": 0, "name": "Test solver"})); raise SystemExit(0)
@@ -87,6 +89,18 @@ def solve(config):
                 handle.create_array("/", "REAL", state)
                 handle.create_array("/", "IMAGINARY", np.zeros(points))
     Path(config["status_file"]).write_text("status\\n")
+    if config.get("camera_profile_file"):
+        # 11.0: the starting state's density in camera pixels, as camera_profile.h bins it.
+        import numpy as np, tables as tb
+        sys.path.insert(0, os.environ["KAPITZA_CORE"])
+        from lab_measurement import camera_profile
+        with tb.open_file(config["initial_state_file"]) as handle:
+            psi = handle.root.REAL[:] + 1j * handle.root.IMAGINARY[:]
+        width = float(config["camera_pixel_width"])
+        first, mass = camera_profile(np.abs(psi) ** 2, float(config["step_x"]), width)
+        Path(config["camera_profile_file"]).write_text(json.dumps({
+            "camera_profile_version": 1, "pixel_width": width, "first_pixel": first,
+            "count": int(mass.size), "mass": [float(v) for v in mass]}))
     if config.get("extended_metrics_file"):
         # 6.0: the exact NumPy sums of the starting state at every status step.
         import numpy as np, tables as tb

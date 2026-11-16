@@ -194,6 +194,26 @@ def check_green_walls(height_er, sigma_um, gap_um, *, grid_points=None, envelope
     
     
 
+def loading_lattice_coefficient(initial_depth_er, alpha, drive_phase):
+    """c of the loading lattice c cos^2(kL x), in E_R, for the drive sin(wt + phi).
+
+    The atoms are loaded into the lattice of depth V_init the drive starts
+    from: c = -V_init (normal) or +V_init (inverted, the lattice flipped),
+    the sign of 1 + alpha sin(phi). With the 5.0-10.0 phase arcsin(-2/alpha)
+    |1 + alpha sin(phi)| = 1 and this is -V_init [1 + alpha sin(phi)] exactly as
+    before; with the 11.0 hardware phase the drive itself starts at -+V_init.
+    Works for numbers and NumPy arrays.
+    """
+    if np.ndim(alpha) == 0 and np.ndim(drive_phase) == 0:
+        factor = 1.0 + float(alpha) * math.sin(float(drive_phase))
+        if abs(abs(factor) - 1.0) >= 1e-9:
+            factor = math.copysign(1.0, factor)
+        return -float(initial_depth_er) * factor
+    factor = 1.0 + np.asarray(alpha, dtype=float) * np.sin(drive_phase)
+    unit = np.abs(np.abs(factor) - 1.0) < 1e-9
+    return -float(initial_depth_er) * np.where(unit, factor, np.sign(factor))
+
+
 def create_init_state(
     V0, alpha, nu_flo, phi, initial_lattice_depth_v0_er=None,
     *, output_directory=None, config_path=None, green_walls=None, drive_phase=None,
@@ -270,7 +290,8 @@ def create_init_state(
     if drive_phase is None:
         loading_lattice_er = initial_lattice_depth_v0_er
     else:
-        loading_lattice_er = -initial_lattice_depth_v0_er * (1.0 + alpha * math.sin(drive_phase))
+        loading_lattice_er = loading_lattice_coefficient(initial_lattice_depth_v0_er, alpha,
+                                                         drive_phase)
 
     psi_x, energies, G_indices, coeffs = bloch_state_1d_plane_wave(
         V0=loading_lattice_er,

@@ -1,4 +1,62 @@
-# Kapitza_GPU10.0
+# Kapitza_GPU11.0
+
+Version 11.0 keeps everything of 10.0 and makes the simulation start, and be
+measured, like the experiment. Settings in
+`phase_diagram/simulation_core/run_phase_diagram_CUDA.py`; with
+`INITIAL_CLOUD_WIDTH_UM = 340`, `DRIVE_PHASE_CONVENTION = "theory"` and
+`LabMeasurement = False` a run is identical to 10.0. **Rebuild with
+`BUILD_CUDA.bat`** (the GPU now writes the final cloud in camera pixels).
+
+```python
+INITIAL_CLOUD_WIDTH_UM = 35.0         # the measured cloud (10.0: 340)
+DRIVE_PHASE_CONVENTION = "hardware"   # drive starts at the loading lattice ("theory" = 10.0)
+LabMeasurement = True                 # StdDev2 as kpAnalysis.m on the lab's camera
+LAB_CAMERA = {...}                    # camera, window and noise (defaults: the lab's)
+```
+
+- **Starting cloud 35 um**, measured in the lab's own images (`AdData.mat`):
+  Gaussian sigma 38-42 um in the undriven lattice (trial 10084), 27-54 um
+  (median 32 um) in the weakest-drive shots of trials 10098 and 10366. The
+  340 um of 9.0-10.0 matched the noise floor of the lab's StdDev2, not the
+  atoms.
+- **Drive phase as the hardware.** MMUser-li's `KpPredistortion.getPhaseTarget`
+  starts the drive at the loading lattice: phi = arcsin((+-V_init/V0 - 1)/alpha),
+  minus when inverted, so the lattice is -20 E_R at t = 0 (loaded at 20 E_R,
+  driven around 10 E_R) with no jump. 5.0-10.0 (and the lab's theory script
+  `kp_PhaseDiagramRealSpace.m`) used arcsin(-2/alpha), a jump to -10 E_R: 18.6
+  degrees off at alpha = 4, 2.4 at alpha = 24. Needs alpha >= 1 + V_init/V0
+  (3) inverted. The starting state is unchanged (the ground state of the
+  loading lattice); the Bloch-state model and the classical ensemble use the
+  same phase.
+- **Measured like the lab.** The GPU writes each run's final |psi|^2 in camera
+  pixels of 3.895 um (`src/camera_profile.h`, one device-to-host copy after the
+  loop; build flag `camera_profile_version`). `lab_measurement.py` puts it on
+  the lab camera (Andor iXon 888 behind 3.338x: 1024 pixels = 3.99 mm, cloud at
+  row ~456), takes `kpAnalysis.m`'s AdData window (rows 120-780 = 661 pixels =
+  2.57 mm along the lattice), adds the camera noise measured in the lab's
+  images (3.78e-4 of the window's atom signal per pixel, trial 10366), and
+  computes `computeStDev` and `computeStDevWithBgSub` (outer-10% baseline,
+  noise floor 0, 4 um per pixel), averaged over 200 noise draws like the lab's
+  averaged repeats. New columns: `lab_stddev2_um`, `lab_stddev_um`,
+  `lab_stddev2_no_noise_um`, `camera_width_um` (true width in the window),
+  `lab_window_fraction`, `camera_fov_fraction`; and `camera_profiles.csv`
+  (every run's profile, with the camera settings in its first line).
+- **Why it matters.** StdDev2 keeps positive camera noise and drops negative
+  noise across its 2.57 mm window, so noise counts as atoms, weighted by the
+  distance squared: a 35 um cloud reads about 240 um. 11.0 puts the same
+  window and noise on the simulation, so simulation and experiment are
+  measured the same way.
+- **Spread scans** (10.0): the lab columns of the combined cloud come from the
+  added-up camera images, exactly: MAKE uses the run's profiles,
+  `quasimomentum_spread.py metrics.csv` finds `camera_profiles.csv` next to it
+  (or `--profiles`).
+- **Validation.** `VALIDATE_EXTENDED_CUDA.bat` now runs 601 steps and checks
+  each point's camera profile against NumPy's binning of the final snapshot.
+  The camera binning is also compiled and tested on a CPU
+  (`tests/camera_profile_host_test.cpp`), and `lab_measurement.py` against a
+  line-by-line port of `kpAnalysis.m`.
+
+## Version 10.0
 
 Version 10.0 keeps everything of 9.0 and gives the atoms a spread of starting
 quasimomenta instead of one q for every atom. With

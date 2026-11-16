@@ -32,8 +32,9 @@ from phase_metric import (
     smooth_density, statistics_from_probabilities,
 )
 from quasimomentum_spread import (
-    APPROXIMATE_NOTE, COVERAGE_WARNING, combine_rows, describe,
+    APPROXIMATE_NOTE, COVERAGE_WARNING, combine_rows, describe, spread_weights,
 )
+from lab_measurement import exact_spread_columns
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +165,8 @@ def grid_parameter_label(grid: dict) -> str:
                                grid_points=grid.get("grid_points"),
                                cloud_width_um=grid.get("initial_cloud_width_um"),
                                hold_time_ms=grid.get("hold_time_ms"),
-                               quasimomentum_values=grid.get("quasimomentum_values_kl"))
+                               quasimomentum_values=grid.get("quasimomentum_values_kl"),
+                               drive_phase_convention=grid.get("drive_phase_convention"))
 
 
 def automatic_plot_title(grid: dict, spread: dict | None = None) -> str:
@@ -193,6 +195,8 @@ def automatic_plot_title(grid: dict, spread: dict | None = None) -> str:
     elif quasimomentum or smoothing:
         title += (f"\nq = {quasimomentum:g} hbar kL"
                   + (f", {smoothing:g} um smoothing" if smoothing else ""))
+    if grid.get("drive_phase_convention") == "hardware":
+        title += "\nDrive starts at the loading lattice (hardware phase)"
     if grid.get("grid_points") is not None:
         hold = grid.get("hold_time_ms")
         title += (f"\nBox {int(grid['grid_points'])} points, cloud "
@@ -289,6 +293,7 @@ def dataset_analysis(manifest_path: Path, *, quasimomentum_center: float | None 
     scan_columns = dataset_columns(grid)
     spread = contract.get("quasimomentum_spread")
     rows, run_rows = [], []
+    profiles: dict = {}          # 11.0: (alpha, f) -> {q: (run index, camera profile)}
     seen = set()
     for run in runs:
         if run.get("status") != "completed":
@@ -336,6 +341,10 @@ def dataset_analysis(manifest_path: Path, *, quasimomentum_center: float | None 
             raise ValueError("Run quasimomentum does not match the manifest.")
         seen.add(coordinate)
         run_rows.append((frequency_index, alpha_index, row))
+        if contract.get("lab_measurement") and run.get("camera_profile"):
+            profiles.setdefault((float(run["alpha"]), float(run["drive_frequency_hz"])), {})[
+                float(run.get("initial_quasimomentum_kl", 0.0))] = (
+                    int(run["run_index"]), run["camera_profile"])
         print(
             f"out_{run['run_index']:03d}: alpha={run['alpha']:.10g}, "
             f"frequency={run['drive_frequency_hz']:.10g} Hz"
@@ -347,6 +356,13 @@ def dataset_analysis(manifest_path: Path, *, quasimomentum_center: float | None 
         center = spread["center_kl"] if quasimomentum_center is None else float(quasimomentum_center)
         width = spread["spread_kl"] if quasimomentum_spread is None else float(quasimomentum_spread)
         combined, coverage = combine_rows([row for *_, row in run_rows], center, width)
+        if contract.get("lab_measurement") and profiles:
+            # 11.0: the lab columns of the combined cloud, exactly, from its image.
+            exact = exact_spread_columns(
+                profiles, spread_weights(spread["values_kl"], center, width)[0],
+                contract["lab_measurement"])
+            for row in combined:
+                row.update(exact[(float(row["alpha"]), float(row["drive_frequency_hz"]))])
         print("Quasimomentum spread: " + describe(spread["values_kl"], center, width))
         if coverage < COVERAGE_WARNING:
             print(f"Warning: only {coverage:.1%} of this spread lies within the simulated q values.")

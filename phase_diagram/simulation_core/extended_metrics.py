@@ -18,7 +18,8 @@ import numpy as np
 from scipy.linalg import eigh
 
 from create_initial_state_function import (
-    ENVELOPE_SIGMA_M, GRID_SPACING_M, bloch_state_1d_plane_wave, hbar, mli,
+    ENVELOPE_SIGMA_M, GRID_SPACING_M, bloch_state_1d_plane_wave, hbar, loading_lattice_coefficient,
+    mli,
 )
 from cuda_workflow_common import point_drive_phase
 from extended_fields import EXTENDED_FIELDS, EXTENDED_SUM_NAMES, finite_or_none
@@ -68,11 +69,11 @@ def solver_wavevector() -> float:
 
 
 def loading_coefficient(grid: dict, alpha: float) -> float:
-    """c of the loading lattice c cos^2(kL x), in E_R: -V_init [1 + alpha sin(phi)]."""
+    """c of the loading lattice c cos^2(kL x), in E_R (-V_init, or +V_init inverted)."""
     phase = point_drive_phase(grid, alpha)
     if phase is None:
         raise ValueError("Extended metrics need a 5.0-style grid with INVERTED.")
-    return -float(grid["initial_lattice_depth_v0_er"]) * (1.0 + float(alpha) * math.sin(phase))
+    return loading_lattice_coefficient(grid["initial_lattice_depth_v0_er"], float(alpha), phase)
 
 
 def solver_settings(grid: dict, alpha: float) -> dict:
@@ -413,7 +414,7 @@ def floquet_q0_metrics(depth_er, initial_depth_er, alpha, frequency_hz, drive_ph
     omega = 2.0 * math.pi * frequency_hz * HBAR / E_R          # in E_R / hbar
     static, drive = lattice_matrices(-depth_er, alpha, q, n_max)
     even = symmetry_sectors(n_max, q)[0]    # the even sector at q = 0, else everything
-    loading = -initial_depth_er * (1.0 + alpha * math.sin(drive_phase))
+    loading = loading_lattice_coefficient(initial_depth_er, alpha, drive_phase)
     *_, coefficients = bloch_state_1d_plane_wave(
         V0=loading, q=q, band_index=0, xarr=np.linspace(0.0, math.pi, 8), n_pw=n_max)
     start = even.T @ coefficients
@@ -500,7 +501,7 @@ def classical_metrics(points, depth_er, initial_depth_er, hold_s, window_s, *,
     alpha = np.array([float(p[0]) for p in points])[:, None]
     big_omega = np.array([2.0 * math.pi * float(p[1]) / omega0 for p in points])[:, None]
     phase = np.array([float(p[2]) for p in points])[:, None]
-    loading = -initial_depth_er * (1.0 + alpha[:, 0] * np.sin(phase[:, 0]))
+    loading = loading_lattice_coefficient(initial_depth_er, alpha[:, 0], phase[:, 0])
     start = np.where(loading < 0.0, 0.0, math.pi)[:, None]
     width = math.sqrt(2.0 / math.sqrt(initial_depth_er))
     speed = math.sqrt(initial_depth_er / depth_er) * width

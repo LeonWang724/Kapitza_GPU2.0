@@ -68,6 +68,11 @@ struct ConfigData {
     // only; see diagnostics_1d.cu). 0 leaves every result as before.
     double density_smoothing_width = 0.0;
 
+    // 11.0: a nonempty path writes the final |psi|^2 binned into camera pixels
+    // of camera_pixel_width (solver length units); see camera_profile.h.
+    std::filesystem::path camera_profile_file;
+    double camera_pixel_width = 0.0;
+
     std::unordered_map<std::string, std::string> raw_values;
 };
 

@@ -67,29 +67,53 @@ def grid_points(manifest: dict):
                frequencies[frequency_index], quasimomenta[quasimomentum_index])
 
 
-def experiment_drive_phase(alpha: float, inverted: bool) -> float:
+DRIVE_PHASE_CONVENTIONS = ("theory", "hardware")
+
+
+def experiment_drive_phase(alpha: float, inverted: bool, convention: str = "theory",
+                           depth_er: float | None = None,
+                           initial_depth_er: float | None = None) -> float:
     """Phase phi of the 5.0 drive sin(omega t + phi), chosen as in the experiment.
 
-    Non-inverted: 0. Inverted: arcsin(-2/alpha), which makes
-    1 + alpha sin(phi) = -1, so the lattice at t = 0 is flipped and the atoms
-    start on top of the time-averaged lattice. Here alpha is the experiment's
-    alpha*beta; the inverted case needs alpha >= 2.
+    "theory" (5.0-10.0, the lab's kp_PhaseDiagramRealSpace.m): non-inverted 0;
+    inverted arcsin(-2/alpha), so 1 + alpha sin(phi) = -1 and the lattice at
+    t = 0 is the flipped V0 lattice; needs alpha >= 2.
+    "hardware" (11.0, KpPredistortion.getPhaseTarget): the drive starts at the
+    loading lattice, V0 [1 + alpha sin(phi)] = +-V_init:
+    phi = arcsin((+-V_init / V0 - 1) / alpha), minus when inverted; needs
+    alpha >= |+-V_init / V0 - 1| (3 for 20 E_R loading into 10 E_R, inverted).
+    Here alpha is the experiment's alpha*beta.
     """
     if not isinstance(inverted, bool):
         raise ValueError("INVERTED must be True or False.")
-    if not inverted:
-        return 0.0
+    if convention not in DRIVE_PHASE_CONVENTIONS:
+        raise ValueError(f"DRIVE_PHASE_CONVENTION must be one of {DRIVE_PHASE_CONVENTIONS}.")
     alpha = float(alpha)
-    if not alpha >= 2.0:
-        raise ValueError(f"Inverted loading needs every alpha >= 2; got alpha = {alpha:g}.")
-    return math.asin(-2.0 / alpha)
+    if convention == "theory":
+        if not inverted:
+            return 0.0
+        if not alpha >= 2.0:
+            raise ValueError(f"Inverted loading needs every alpha >= 2; got alpha = {alpha:g}.")
+        return math.asin(-2.0 / alpha)
+    if depth_er is None or initial_depth_er is None or not float(depth_er) > 0.0 \
+            or not float(initial_depth_er) > 0.0:
+        raise ValueError("The hardware drive phase needs positive lattice and loading depths.")
+    target = (-1.0 if inverted else 1.0) * float(initial_depth_er) / float(depth_er) - 1.0
+    if not alpha >= abs(target):
+        raise ValueError(f"The hardware drive phase needs every alpha >= {abs(target):g} "
+                         f"(V_init = {float(initial_depth_er):g} E_R, V0 = {float(depth_er):g} E_R"
+                         f"{', inverted' if inverted else ''}); got alpha = {alpha:g}.")
+    return math.asin(target / alpha)
 
 
 def point_drive_phase(grid: dict, alpha: float) -> float | None:
     """The 5.0 drive phase of a grid point, or None for a 4.0 grid."""
     if "inverted" not in grid:
         return None
-    return experiment_drive_phase(alpha, grid["inverted"])
+    return experiment_drive_phase(alpha, grid["inverted"],
+                                  grid.get("drive_phase_convention", "theory"),
+                                  grid.get("lattice_depth_v0_er"),
+                                  grid.get("initial_lattice_depth_v0_er"))
 
 
 def generate_point_inputs(
@@ -148,6 +172,7 @@ def phase_dataset_label(
     cloud_width_um: float | None = None,
     hold_time_ms: float | None = None,
     quasimomentum_values: list[float] | None = None,
+    drive_phase_convention: str | None = None,
 ) -> str:
     """Build the shared descriptive label used by datasets and analysis files.
 
@@ -156,7 +181,8 @@ def phase_dataset_label(
     quasimomentum and the density smoothing when they are not 0; 8.0 adds the
     box and the starting cloud width when they differ from 4.0-7.0's (65536
     points, 30 um) and the hold time when it is set. 10.0 spread scans name
-    their range of simulated quasimomenta instead of a single q.
+    their range of simulated quasimomenta instead of a single q. 11.0 adds
+    _PhaseHw when the drive starts at the loading lattice (hardware phase).
     """
     if inverted is None:
         start = f"Phase_{parameter_token(phase_radians)}rad"
@@ -186,6 +212,8 @@ def phase_dataset_label(
         label += f"_W{parameter_token(cloud_width_um)}um"
     if hold_time_ms is not None:
         label += f"_T{parameter_token(hold_time_ms)}ms"
+    if drive_phase_convention == "hardware":
+        label += "_PhaseHw"
     return label
 
 

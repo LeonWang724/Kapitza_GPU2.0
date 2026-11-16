@@ -186,7 +186,8 @@ class ScanTests(unittest.TestCase):
             results = root / "results"
             with (patch.object(runner, "SCRIPT_DIRECTORY", core),
                   patch.multiple(runner, INVERTED=True, NUMBER_OF_TABS=1, INITIAL_CLOUD_WIDTH_UM=40.0,
-                                 QUASIMOMENTUM_VALUES_KL=None,
+                                 QUASIMOMENTUM_VALUES_KL=None, LabMeasurement=False,
+                                 DRIVE_PHASE_CONVENTION="theory",
                                  LATTICE_DEPTH_V0_ER=10.0, INITIAL_LATTICE_DEPTH_V0_ER=20.0,
                                  ALPHA_VALUES=np.array([12.0]),
                                  DRIVE_FREQUENCY_HZ_VALUES=np.array([1.0e6])),

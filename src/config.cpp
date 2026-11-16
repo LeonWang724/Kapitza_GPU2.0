@@ -155,6 +155,8 @@ ConfigData read_config(const std::filesystem::path& config_path) {
         double_value(config.raw_values, "extended_metrics_pixel_width", 0.0);
     config.density_smoothing_width =
         double_value(config.raw_values, "density_smoothing_width", 0.0);
+    config.camera_profile_file = path_value(config.raw_values, "camera_profile_file");
+    config.camera_pixel_width = double_value(config.raw_values, "camera_pixel_width", 0.0);
     return config;
 }
 
@@ -219,6 +221,12 @@ void validate_1d_config(const ConfigData& config) {
     if (half > 0 && config.imaginary_time) {
         throw std::runtime_error("Density smoothing requires real-time evolution.");
     }
+    if (!config.camera_profile_file.empty() &&
+        (!(config.camera_pixel_width > config.step_x) ||
+         !std::isfinite(config.camera_pixel_width) || config.imaginary_time)) {
+        throw std::runtime_error(
+            "A camera profile needs real-time evolution and camera_pixel_width > step_x.");
+    }
 }
 
 void validate_batch_compatible(const std::vector<ConfigData>& configs) {
@@ -274,6 +282,9 @@ void validate_batch_compatible(const std::vector<ConfigData>& configs) {
                 "extended_metrics_pixel_width");
         require(config.density_smoothing_width == first.density_smoothing_width,
                 "density_smoothing_width");
+        require(config.camera_profile_file.empty() == first.camera_profile_file.empty(),
+                "camera_profile_file (on or off)");
+        require(config.camera_pixel_width == first.camera_pixel_width, "camera_pixel_width");
 
         // Every system writes its own results.
         const auto unique = [&](std::set<std::string>& seen,

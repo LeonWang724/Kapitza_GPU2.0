@@ -27,6 +27,10 @@ How each metrics.csv column combines:
     other column, e.g. the IPRs, entropies, kurtosis, on-site spread, growth
     rates and level statistics, which depend on the square of the density or on
     the whole time series, which metrics.csv does not keep.
+11.0: the lab_* columns (lab_measurement.py) are recomputed exactly from the
+added-up camera images when camera_profiles.csv is available (MAKE, the command
+line and the plot tools find it next to metrics.csv); without it they are
+weighted averages like the other approximate columns.
 The widths are averages over the last 30 samples, about the cloud's centre at
 each sample. For a spread centred at 0 the combined centre stays at 0 and the
 widths are exact. Otherwise the combined centre's own motion during those
@@ -277,6 +281,41 @@ APPROXIMATE_NOTE = ("approximate (average over q): every column not in "
                     "quasimomentum_spread.EXACT_COLUMNS")
 
 
+def find_profiles(csv_path: Path) -> Path | None:
+    """camera_profiles.csv belonging to a metrics CSV: <stem>_camera_profiles.csv
+    or camera_profiles.csv in the same folder."""
+    csv_path = Path(csv_path)
+    for candidate in (csv_path.with_name(f"{csv_path.stem}_camera_profiles.csv"),
+                      csv_path.with_name("camera_profiles.csv")):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def apply_exact_lab_columns(combined: list[dict], rows: list[dict], profiles_path: Path,
+                            center: float, spread: float) -> bool:
+    """Replace the combined rows' lab columns by those of the added-up camera
+    images (11.0). False (rows unchanged) if the profiles do not match the rows."""
+    from lab_measurement import exact_spread_columns, read_profiles_csv
+    profiles, camera = read_profiles_csv(profiles_path)
+    cells: dict[tuple, dict] = {}
+    for row in rows:
+        index = int(number(row["run_index"]))
+        entry = profiles.get(index)
+        q = number(row[QUASIMOMENTUM_COLUMN])
+        key = (number(row["alpha"]), number(row["drive_frequency_hz"]))
+        if entry is None or abs(entry["alpha"] - key[0]) > 1e-9 \
+                or abs(entry["drive_frequency_hz"] - key[1]) > 1e-6 \
+                or abs(entry["initial_quasimomentum_kl"] - q) > 1e-12:
+            return False
+        cells.setdefault(key, {})[q] = (index, entry["profile"])
+    weights = spread_weights(simulated_values(rows), center, spread)[0]
+    exact = exact_spread_columns(cells, weights, camera)
+    for row in combined:
+        row.update(exact[(number(row["alpha"]), number(row["drive_frequency_hz"]))])
+    return True
+
+
 def describe(values, center: float, spread: float) -> str:
     weights, coverage = spread_weights(values, center, spread)
     shares = ", ".join(f"{q:+.3g}: {w:.0%}" for q, _, _, w in weights if w >= 0.005)
@@ -291,12 +330,17 @@ def main() -> int:
     parser.add_argument("--center", type=float, default=0.0, help="centre of q (hbar kL)")
     parser.add_argument("--spread", type=float, default=0.1, help="spread (std) of q (hbar kL)")
     parser.add_argument("--output", type=Path, help="combined CSV (default: next to the input)")
+    parser.add_argument("--profiles", type=Path,
+                        help="camera_profiles.csv (11.0; default: found next to the input)")
     arguments = parser.parse_args()
     with arguments.csv.open(encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     if not is_spread_table(rows):
         raise SystemExit(f"{arguments.csv.name} has one quasimomentum per point; nothing to combine.")
     combined, coverage = combine_rows(rows, arguments.center, arguments.spread)
+    profiles = arguments.profiles or find_profiles(arguments.csv)
+    exact = bool(profiles) and apply_exact_lab_columns(combined, rows, profiles,
+                                                       arguments.center, arguments.spread)
     token = lambda value: f"{value:g}".replace("-", "m").replace(".", "p")   # noqa: E731
     output = arguments.output or arguments.csv.with_name(
         f"{arguments.csv.stem}_spread_c{token(arguments.center)}_s{token(arguments.spread)}.csv")
@@ -309,7 +353,8 @@ def main() -> int:
     print(describe(simulated_values(rows), arguments.center, arguments.spread))
     if coverage < COVERAGE_WARNING:
         print(f"Warning: only {coverage:.1%} of the spread lies within the simulated q values.")
-    print(f"{len(combined)} points; {APPROXIMATE_NOTE}.")
+    print(f"{len(combined)} points; {APPROXIMATE_NOTE}"
+          + (f"; lab columns exact from {Path(profiles).name}." if exact else "."))
     print(f"Saved {output}")
     return 0
 

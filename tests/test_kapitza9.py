@@ -25,7 +25,16 @@ from create_initial_state_function import GRID_SPACING_M, create_init_state  # n
 from cuda_workflow_common import phase_dataset_label  # noqa: E402
 
 
+# 9.0's default; 11.0 starts at the measured 35 um (test_kapitza11.py).
+SETTINGS_9 = {"INITIAL_CLOUD_WIDTH_UM": 340.0}
+
+
 class StartingCloudTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.multiple(runner, **SETTINGS_9)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_default_is_the_experiments_cloud(self):
         self.assertEqual(runner.INITIAL_CLOUD_WIDTH_UM, 340.0)
         self.assertEqual(runner.GRID_POINTS, 262144)

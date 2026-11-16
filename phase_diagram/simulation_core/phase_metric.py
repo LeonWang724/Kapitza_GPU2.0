@@ -6,6 +6,7 @@ import math
 
 from extended_fields import EXTENDED_FIELDS, extended_columns
 from level_statistics import COLUMNS as LEVEL_STATISTICS_FIELDS
+from lab_measurement import LAB_FIELDS
 
 METRIC_NAME = "mean_discrete_sum_abs_psi_fourth_power"
 STATISTICS_FIELDS = (
@@ -58,7 +59,8 @@ def csv_fields(contract: dict) -> tuple[str, ...]:
     if contract.get("quasimomentum_spread"):
         base = CSV_FIELDS[:3] + ("initial_quasimomentum_kl",) + CSV_FIELDS[3:]
     return (base + (LEVEL_STATISTICS_FIELDS if contract.get("level_statistics") else ())
-            + (EXTENDED_FIELDS if contract.get("extended_metrics") else ()))
+            + (EXTENDED_FIELDS if contract.get("extended_metrics") else ())
+            + (LAB_FIELDS if contract.get("lab_measurement") else ()))
 
 
 def level_statistics_columns(record: dict) -> dict:
@@ -90,6 +92,11 @@ def csv_row(record: dict, summary: dict, config: dict, contract: dict) -> dict:
         row.update(level_statistics_columns(record))
     if contract.get("extended_metrics"):
         row.update(extended_columns(record))
+    if contract.get("lab_measurement"):
+        values = record.get("lab_measurement")
+        if not isinstance(values, dict):
+            raise ValueError(f"Point {record.get('run_index')} is missing its lab measurement.")
+        row.update({key: values.get(key) for key in LAB_FIELDS})
     return row
 
 

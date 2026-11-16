@@ -9,6 +9,7 @@
 #include "fused_loop.h"
 #include "hdf5_io.h"
 #include "phase_metric.h"
+#include "camera_profile.h"
 
 #include <cufft.h>
 
@@ -63,6 +64,21 @@ std::vector<cuDoubleComplex> copy_device_to_host(
 void save_device_field(const std::filesystem::path& path,
                        const DeviceBuffer<cuDoubleComplex>& device) {
     write_complex_hdf5(path, copy_device_to_host(device));
+}
+
+// 11.0: the final |psi|^2 of one system, binned into camera pixels on the host.
+void write_device_camera_profile(const ConfigData& config, const cuDoubleComplex* psi,
+                                 int points) {
+    std::vector<cuDoubleComplex> host(static_cast<std::size_t>(points));
+    CUDA_CHECK(cudaMemcpy(host.data(), psi, host.size() * sizeof(cuDoubleComplex),
+                          cudaMemcpyDeviceToHost));
+    std::vector<double> density(host.size());
+    for (std::size_t i = 0; i < host.size(); ++i) {
+        density[i] = host[i].x * host[i].x + host[i].y * host[i].y;
+    }
+    write_camera_profile(config.camera_profile_file,
+                         camera_profile(density.data(), points, config.step_x,
+                                        config.camera_pixel_width));
 }
 
 void copy_host_to_device(const std::vector<cuDoubleComplex>& host,
@@ -309,6 +325,9 @@ SolverResult run_reference_solver_1d(const ConfigData& config,
     if (compact) {
         phase_metric->write(config.phase_metric_file);
     }
+    if (!config.camera_profile_file.empty()) {
+        write_device_camera_profile(config, psi.data(), points);
+    }
     std::cout << "CUDA run complete: " << completed_iterations
               << " iterations in " << elapsed << " s ("
               << (elapsed > 0.0 ? completed_iterations / elapsed : 0.0)
@@ -527,6 +546,16 @@ public:
         }
     }
 
+    // 11.0: psi holds the final state after the loop (the last iteration
+    // always completes its second half step).
+    void write_camera_profiles() {
+        for (int system = 0; system < systems_; ++system) {
+            if (!configs_[system].camera_profile_file.empty()) {
+                write_device_camera_profile(configs_[system], psi_at(system), points_);
+            }
+        }
+    }
+
 private:
     static std::vector<double> omegas(const std::vector<ConfigData>& configs) {
         std::vector<double> values;
@@ -654,6 +683,7 @@ SolverResult run_solver_batch_1d(const std::vector<ConfigData>& configs,
     const auto finish = std::chrono::steady_clock::now();
     const double elapsed = std::chrono::duration<double>(finish - start).count();
     run.write_phase_metrics();
+    run.write_camera_profiles();
 
     std::cout << "CUDA run complete: " << completed_iterations
               << " iterations in " << elapsed << " s ("
