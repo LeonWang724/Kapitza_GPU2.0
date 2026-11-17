@@ -159,7 +159,7 @@ def event(kind):
         os.write(fd, data.encode()); os.close(fd)
 
 event("start")
-failing = configs[0].get("test_fail") == "true" and any("tab_001" in Path(path).parts for path in paths)
+failing = configs[0].get("test_fail") == "true" and any("tab_001" in path for path in paths)
 time.sleep(0.5 if configs[0].get("test_fail") != "true" or failing else 5)
 if failing:
     print("Intentional solver failure", flush=True); raise SystemExit(7)

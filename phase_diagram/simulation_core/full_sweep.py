@@ -6,7 +6,8 @@ import faulthandler
 from pathlib import Path
 
 from cuda_workflow_common import (
-    generate_point_inputs, grid_points, point_drive_phase, read_config, run_logged,
+    check_solver_paths, generate_point_inputs, grid_points, point_drive_phase, read_config,
+    run_logged, solver_failure_reason,
     sha256_file, update_config, utc_now, write_json_atomic,
 )
 from level_statistics import level_statistics_task
@@ -82,13 +83,16 @@ def run_full_sweep(
                 for name, path in inputs.items()
             }
             write_json_atomic(manifest_path, manifest)
+            check_solver_paths([config], results_root)
             code = run_logged(
                 [str(executable), str(config), "--device", str(device),
                  "--floquet-mode", floquet_mode, *extra_arguments], results_root, log,
             )
             record["return_code"] = code
             if code != 0:
-                raise RuntimeError(f"CUDA point {index} failed with exit code {code}; see {log}")
+                reason = solver_failure_reason(log)
+                raise RuntimeError(f"CUDA point {index} failed with exit code {code}"
+                                   + (f" ({reason})" if reason else "") + f"; see {log}")
             record["status"] = "completed"
             record["finished_utc"] = utc_now()
             manifest["completed_points"] += 1

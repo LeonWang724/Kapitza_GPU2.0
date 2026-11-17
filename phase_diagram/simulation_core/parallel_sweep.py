@@ -254,7 +254,11 @@ def run_parallel_sweep(
                 worker = read_manifest(path)
                 exit_code = process.poll()
                 if worker["status"] in {"failed", "cancelled"}:
-                    raise RuntimeError(f"Tab {entry['worker_index'] + 1} failed; see {path.parent}")
+                    # 12.0: say why here; the full traceback is in worker_error.txt.
+                    reason = worker.get("error")
+                    raise RuntimeError(f"Tab {entry['worker_index'] + 1} failed"
+                                       + (f": {reason}" if reason else "")
+                                       + f"; see {path.parent}")
                 if worker["status"] != "completed":
                     pid = worker.get("worker_pid")
                     dead = (exit_code is not None and (not terminal or exit_code != 0))

@@ -8,7 +8,7 @@ import math
 import os
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 
@@ -373,6 +373,48 @@ def git_provenance(directory: Path) -> dict[str, Any]:
     commit = command("rev-parse", "HEAD")
     status = command("status", "--porcelain")
     return {"commit": commit, "dirty": status not in {"", "unavailable"}}
+
+
+# 12.0: gpe1d_cuda.exe and its HDF5 library open files through the classic
+# Windows file API, which refuses a path longer than 259 characters (MAX_PATH),
+# even on machines where Python itself handles long paths. None = no limit.
+SOLVER_PATH_LIMIT: int | None = 259 if os.name == "nt" else None
+SOLVER_PATH_KEYS = ("initial_state_file", "potential_file", "floquet_potential_file",
+                    "status_file", "phase_metric_file", "camera_profile_file",
+                    "extended_metrics_file")
+
+
+def check_solver_paths(config_paths, cwd: Path, limit: int | None = None) -> None:
+    """Refuse, before the solver starts, any file path it could not open."""
+    limit = SOLVER_PATH_LIMIT if limit is None else limit
+    if limit is None:
+        return
+    for config_path in config_paths:
+        config_path = Path(config_path)
+        config = read_config(config_path)
+        named = [("config", str(config_path if config_path.is_absolute() else cwd / config_path))]
+        named += [(key, config[key]) for key in SOLVER_PATH_KEYS if config.get(key)]
+        if config.get("output_folder") and config.get("save_psi", "").lower() == "true":
+            # Snapshots are written as <output_folder>/<16 digits>.h5.
+            named.append(("snapshot", str(Path(config["output_folder"]) / ("0" * 16 + ".h5"))))
+        for key, value in named:
+            absolute = os.path.isabs(value) or PureWindowsPath(value).is_absolute()
+            path = value if absolute else os.path.join(str(cwd), value)
+            if len(path) > limit:
+                raise RuntimeError(
+                    f"The CUDA solver cannot open a path of {len(path)} characters on "
+                    f"Windows (limit {limit}): {key} = {path}. Move the Kapitza folder "
+                    "closer to the top of the drive or shorten the results folder name.")
+
+
+def solver_failure_reason(log_path: Path) -> str | None:
+    """The solver's own last 'gpe1d_cuda failed: ...' line from its log, if any."""
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    reasons = [line.strip() for line in lines if line.strip().startswith("gpe1d_cuda failed:")]
+    return reasons[-1] if reasons else None
 
 
 def run_logged(command: list[str], cwd: Path, log_path: Path) -> int:

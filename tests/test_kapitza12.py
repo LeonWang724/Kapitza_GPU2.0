@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import extended_metrics as em  # noqa: E402
 import run_phase_diagram_CUDA as runner  # noqa: E402
 from create_initial_state_function import create_init_state  # noqa: E402
+import cuda_workflow_common as cwc  # noqa: E402
 from cuda_workflow_common import (  # noqa: E402
     drive_hold, experiment_drive_phase, phase_dataset_label, read_config,
 )
@@ -273,3 +274,148 @@ class ScanTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# The input gpe1d_cuda.exe could not open on the laptop (2026-11-17): the scan's
+# scratch folder sat inside the long results folder, and the 12.0 label's
+# "_Hold2ms" took the path from 259 characters (11.0, just fitting) to 267.
+LAPTOP_INPUT = (r"C:\Users\leonw\Desktop\Kapitza_GPU12.0\phase_diagram\simulation_core\results_cuda"
+                r"\LatticeDepth_10ER_InitialDepth_20ER_Inverted_Q0to0p2x5kL_Smooth4um_Box262144_W35um"
+                r"_T2ms_PhaseHw_Hold2ms_cuda_20261117T062535Z\workers\tab_001\.work_zry1qx7r"
+                r"\point_00\in\lattice_gauss.h5")
+
+
+def write_config(directory: Path, **values) -> Path:
+    path = directory / "run.config"
+    path.write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+    return path
+
+
+class SolverPathTests(unittest.TestCase):
+    """The solver's files must stay under Windows' 260-character path limit."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="paths ")
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+
+    def test_the_laptop_input_is_refused_before_the_solver_starts(self):
+        self.assertEqual(len(LAPTOP_INPUT), 267)
+        config = write_config(self.directory, initial_state_file=LAPTOP_INPUT, save_psi="false")
+        with self.assertRaisesRegex(RuntimeError, r"267 characters.*limit 259.*initial_state_file"):
+            cwc.check_solver_paths([config], self.directory, limit=259)
+
+    def test_short_paths_pass(self):
+        files = {key: str(self.directory / "in" / f"{key}.h5") for key in cwc.SOLVER_PATH_KEYS}
+        config = write_config(self.directory, save_psi="false", **files)
+        cwc.check_solver_paths([config], self.directory, limit=259)
+
+    def test_each_kind_of_path_counts(self):
+        cwd = self.directory / ("c" * 40)
+        cases = {
+            "relative input, measured from the solver's folder":
+                ({"potential_file": "p" * (300 - len(str(cwd)))}, "potential_file"),
+            "snapshots inside output_folder":
+                ({"output_folder": str(self.directory / ("o" * (255 - len(str(self.directory))))),
+                  "save_psi": "true"}, "snapshot"),
+            "the config itself":
+                ({}, "config"),
+        }
+        for name, (values, key) in cases.items():
+            with self.subTest(name):
+                folder = self.directory / ("x" * (150 if key == "config" else 1))
+                folder.mkdir(exist_ok=True)
+                config = write_config(folder, **values)
+                limit = len(str(config)) - 1 if key == "config" else 259
+                with self.assertRaisesRegex(RuntimeError, key):
+                    cwc.check_solver_paths([config], cwd, limit=limit)
+        # Without saved snapshots the output folder is not opened.
+        config = write_config(self.directory, save_psi="false",
+                              output_folder=str(self.directory / ("o" * 300)))
+        cwc.check_solver_paths([config], cwd, limit=259)
+
+    def test_only_windows_is_limited_by_default(self):
+        self.assertEqual(cwc.SOLVER_PATH_LIMIT, 259 if os.name == "nt" else None)
+        config = write_config(self.directory, initial_state_file=LAPTOP_INPUT)
+        with patch.object(cwc, "SOLVER_PATH_LIMIT", None):
+            cwc.check_solver_paths([config], self.directory)
+        with patch.object(cwc, "SOLVER_PATH_LIMIT", 259), self.assertRaises(RuntimeError):
+            cwc.check_solver_paths([config], self.directory)
+
+    def test_the_solver_reason_is_read_from_its_log(self):
+        log = self.directory / "solver.log"
+        self.assertIsNone(cwc.solver_failure_reason(log))
+        log.write_text("CUDA device: 0\n  minor: Unable to open file\n"
+                       "gpe1d_cuda failed: Unable to open HDF5 input: in\\lattice_gauss.h5\n")
+        self.assertEqual(cwc.solver_failure_reason(log),
+                         "gpe1d_cuda failed: Unable to open HDF5 input: in\\lattice_gauss.h5")
+        log.write_text("Systems in this GPU batch: 32\n")
+        self.assertIsNone(cwc.solver_failure_reason(log))
+
+
+@unittest.skipIf(os.name == "nt", "The stand-in solver uses a POSIX shebang; run CUDA validation on Windows.")
+class LongResultsFolderTests(unittest.TestCase):
+    """A scan in a results folder as long as the laptop's runs, under the Windows limit."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="long scan ")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.core = self.root / "core"
+        self.core.mkdir()
+        self.events = self.root / "events.jsonl"
+        (self.core / "gpe1d.config").write_text(
+            "points_x=65536\nnumber_of_iterations=3000\nsave_every_nth_iteration=100\n"
+            "show_stats_every_nth_iteration=100\ntime_step=0.5\n"
+            "imaginary_time=false\nfloquet_omega=0\nstep_x=1\n"
+            f"test_events={self.events}\n")
+        self.solver = self.root / "stand in solver.exe"
+        self.solver.write_text(FAKE_SOLVER)
+        self.solver.chmod(0o755)
+        # As long as the laptop's results folder plus workers\tab_001 (209).
+        parent = self.root / ("r" * max(1, 200 - len(str(self.root)) - len("/results")))
+        self.results = parent / "results"
+        self.assertGreaterEqual(len(str(self.results)), 200)
+
+    def scan(self, tabs: int) -> int:
+        with (patch.object(runner, "SCRIPT_DIRECTORY", self.core),
+              patch.multiple(runner, INVERTED=True, NUMBER_OF_TABS=tabs, GRID_POINTS=65536,
+                             QUASIMOMENTUM_VALUES_KL=[0.0, 0.1], QUASIMOMENTUM_SPREAD_KL=0.05,
+                             LATTICE_DEPTH_V0_ER=10.0, INITIAL_LATTICE_DEPTH_V0_ER=20.0,
+                             ALPHA_VALUES=np.array([4.0]),
+                             DRIVE_FREQUENCY_HZ_VALUES=np.array([1.0e6, 2.0e6])),
+              patch.object(cwc, "SOLVER_PATH_LIMIT", 259),
+              patch.dict(os.environ, {"KAPITZA_CORE": str(CORE)}),
+              patch.object(sys, "argv", ["runner", "--executable", str(self.solver),
+                                        "--results", str(self.results), "--headless"]),
+              contextlib.redirect_stdout(io.StringIO())):
+            return runner.main()
+
+    def test_the_solver_files_stay_short_and_are_removed(self):
+        scratch = Path(tempfile.gettempdir())
+        before = set(scratch.glob("kapitza_*"))
+        self.assertEqual(self.scan(tabs=1), 0)
+        starts = [json.loads(line) for line in self.events.read_text().splitlines()
+                  if json.loads(line)["kind"] == "start"]
+        self.assertEqual(len(starts), 4)
+        for event in starts:
+            for path in (event["config"], event["input"]):
+                self.assertLessEqual(len(path), 259, path)
+                self.assertNotIn(str(self.results), path)
+                self.assertTrue(any(part.startswith("kapitza_") for part in Path(path).parts), path)
+        self.assertEqual(set(scratch.glob("kapitza_*")) - before, set())
+        with open(self.results / "metrics.csv", newline="") as handle:
+            self.assertEqual(len(list(csv.DictReader(handle))), 4)
+
+    def test_a_failed_tab_says_why(self):
+        failing = FAKE_SOLVER.replace(
+            'print("Intentional solver failure", flush=True)',
+            'print("gpe1d_cuda failed: Unable to open HDF5 input: test input", flush=True)')
+        self.assertNotEqual(failing, FAKE_SOLVER)
+        self.solver.write_text(failing)
+        with (self.core / "gpe1d.config").open("a") as stream:
+            stream.write("test_fail=true\n")
+        with self.assertRaisesRegex(
+                RuntimeError, r"Tab 1 failed: CUDA (point|batch of points) \S+ failed with exit code 7\. "
+                              r"gpe1d_cuda failed: Unable to open HDF5 input: test input; see "):
+            self.scan(tabs=2)

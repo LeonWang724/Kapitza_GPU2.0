@@ -37,6 +37,14 @@ DRIVE_WHOLE_CYCLES = True    # N = round(HOLD_TIME_MS x f) cycles, like hw_KPMod
   `VALIDATE_FAST_CUDA.bat` does the same on the GPU, plus a realistic point
   driven for half its steps and then held; `tests/test_kapitza12.py` checks
   the stops, the hold lattice from the real generator and a two-tab scan.
+- **Short scratch paths (fix).** Each tab's scratch folder for the current GPU
+  batch now lives in the system temporary folder (`%TEMP%\kapitza_tab_001_...`)
+  instead of inside the results folder. `gpe1d_cuda.exe` cannot open a path
+  longer than 259 characters on Windows, and the `_Hold2ms` label made the
+  inputs 267 characters long ("Unable to open HDF5 input"). The runner now
+  also refuses a too-long solver path before starting, and a failed tab prints
+  the solver's own error line. Failed batches are still copied to
+  `failed_point` in the results folder. Python only: no rebuild.
 
 ## 11.0
 

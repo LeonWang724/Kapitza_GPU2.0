@@ -16,9 +16,9 @@ from pathlib import Path
 from typing import Callable
 
 from cuda_workflow_common import (
-    SCRIPT_DIRECTORY, drive_hold, generate_point_inputs, grid_points, point_drive_phase,
-    point_grid,
-    read_config, run_logged, sha256_file, update_config, utc_now, write_json_atomic,
+    SCRIPT_DIRECTORY, check_solver_paths, drive_hold, generate_point_inputs, grid_points,
+    point_drive_phase, point_grid, read_config, run_logged, sha256_file,
+    solver_failure_reason, update_config, utc_now, write_json_atomic,
 )
 from lab_measurement import measure, read_profile
 from level_statistics import level_statistics_task
@@ -82,7 +82,13 @@ def run_compact_sweep(
         table.flush()
         # Reuse one small scratch directory for the entire sweep. It holds only
         # the current batch's inputs/logs/status/configs and scalar outputs.
-        with tempfile.TemporaryDirectory(prefix=".work_", dir=results_root) as temporary:
+        # 12.0: it lives in the system temporary folder, whose short path keeps
+        # every solver file under Windows' 260-character limit; inside the
+        # long results folder the inputs could not be opened. A failed batch is
+        # still copied to failed_point in the results folder. A parallel tab's
+        # folder is named after it (kapitza_tab_001_...).
+        tab = results_root.name if results_root.name.startswith("tab_") else ""
+        with tempfile.TemporaryDirectory(prefix=f"kapitza_{tab}_" if tab else "kapitza_") as temporary:
             work = Path(temporary)
             for batch in batched(grid_points(manifest), batch_size):
                 # Delete only this runner's previous scratch artifacts.
@@ -200,6 +206,7 @@ def run_compact_sweep(
                     if len(batch) > 1:
                         print(f"\nSimulating points {batch[0][0]:03d}-{batch[-1][0]:03d} "
                               f"together as one GPU batch of {len(batch)}.")
+                    check_solver_paths([config for config, _, _ in points], work)
                     log_path = work / "solver.log"
                     code = run_logged(
                         [str(executable), *(str(config) for config, _, _ in points),
@@ -211,7 +218,9 @@ def run_compact_sweep(
                     if code != 0:
                         label = (f"point {batch[0][0]}" if len(batch) == 1 else
                                  f"batch of points {batch[0][0]}-{batch[-1][0]}")
-                        raise RuntimeError(f"CUDA {label} failed with exit code {code}.")
+                        reason = solver_failure_reason(log_path)
+                        raise RuntimeError(f"CUDA {label} failed with exit code {code}."
+                                           + (f" {reason}" if reason else ""))
                     # Validate the whole batch before committing any of it.
                     values = []
                     for record, (_, summary_path, generated) in zip(records, points):
